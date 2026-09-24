@@ -1,10 +1,20 @@
 # Database
 
-Full DDL lives in [`database/schema.sql`](../database/schema.sql) (PostgreSQL).
-This document explains the *why* behind the shape of it. **No migration
-tooling runs this schema yet** — Phase 1's backend does not connect to a
-live database (see `backend/src/db/pool.ts`); this is a reviewed design for
-the phase where it does.
+Full DDL lives in [`database/migrations/`](../database/migrations/)
+(PostgreSQL), applied in order by `backend/src/db/migrate.ts`
+(`npm run db:migrate --workspace=backend`). This document explains the
+*why* behind the shape of it.
+
+Two conventions worth knowing before reading the DDL:
+
+- **IDs are generated application-side** (`crypto.randomUUID()`, see
+  `backend/src/utils/id.ts`), not via a database default. This avoids
+  depending on the `pgcrypto` extension being enabled, so setup is just
+  "create a database" — no extensions to remember.
+- **Email uniqueness is a plain `UNIQUE` constraint on a lowercased
+  value** — the application normalizes email to lowercase before every
+  insert/query (see `modules/auth/auth.validation.ts`), so no `citext`
+  extension is needed either.
 
 ## Entity groups
 
@@ -25,7 +35,19 @@ the phase where it does.
 | `conversation_members` | Membership + per-member read state (`last_read_message_id`) and mute state |
 | `messages` | Message content, soft-deletable via `deleted_at`, supports replies via `reply_to_message_id` |
 | `message_reactions` | Composite-keyed (message, user, emoji) so a user can react with multiple distinct emoji but not duplicate the same one |
+| `message_receipts` | One row per (message, recipient) tracking `delivered`/`read` status — see below |
 | `attachments` | File metadata; `message_id` is nullable so an attachment can be uploaded before the message that references it is created |
+
+`message_receipts` is what powers sent/delivered/read ticks: a message
+with no receipt row for a recipient is "sent" only; a `delivered` row is
+written the instant that recipient's WebSocket connection receives it; a
+`read` row is written when they mark the conversation read
+(`MessagesRepository.markReadUpTo`, upserted so a status never regresses
+from `read` back to `delivered`). For a direct (1:1) conversation there is
+exactly one possible recipient per message, so `MessagesRepository` finds
+it with `r.user_id != m.sender_id` rather than needing to know the
+recipient's ID up front — a query shape that will need to change once
+group conversations (multiple recipients) exist.
 
 ### Groups
 
@@ -76,10 +98,19 @@ Three reasons, all deliberate:
 - `sessions(expires_at)` supports a cleanup job that purges expired
   sessions without a full table scan.
 
+## Testing against this schema without a real database
+
+Backend integration tests apply every migration to a fresh `pg-mem`
+instance (an in-memory PostgreSQL-compatible engine) per test file — see
+`backend/tests/helpers/testDb.ts`. This exercises the real SQL in the
+repositories (joins, `ON CONFLICT`, transactions) without requiring a
+network database in CI or on a fresh clone. Production always talks to a
+real PostgreSQL server via `pg`; `pg-mem` is test-only.
+
 ## Not yet in the schema (intentionally)
 
 Call/voice metadata, message search indexes (would likely need a
 full-text or vector index once "Ask Your Chats" is implemented), and
-payment/billing tables are out of scope for Phase 1 and are not modeled yet
-— adding them speculatively would just be guessing at requirements ahead of
-the phase that needs them.
+payment/billing tables are out of scope for the current phase and are not
+modeled yet — adding them speculatively would just be guessing at
+requirements ahead of the phase that needs them.

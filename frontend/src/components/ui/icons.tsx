@@ -102,6 +102,23 @@ export function UserIcon(props: IconProps) {
   );
 }
 
+export function CheckIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M20 6 9 17l-5-5" />
+    </svg>
+  );
+}
+
+export function DoubleCheckIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="m2 12 5 5L18 6" />
+      <path d="m8 12 5 5L24 6" />
+    </svg>
+  );
+}
+
 export function SparkleIcon(props: IconProps) {
   return (
     <svg {...base} {...props}>

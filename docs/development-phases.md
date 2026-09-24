@@ -5,7 +5,7 @@ reviewed and merged before the next begins — this document tracks what's
 done and what's next so the project doesn't drift into "build everything
 at once."
 
-## Phase 1 — Foundation ✅ (this phase)
+## Phase 1 — Foundation ✅
 
 - Project structure: `frontend/`, `backend/`, `database/`, `docs/`
 - Frontend: React + TypeScript + Vite + Tailwind; landing, login, signup,
@@ -21,20 +21,41 @@ at once."
 - Database schema designed and documented, not yet connected
 - Unit + API tests for auth; component tests for frontend routing/UI
 
-## Phase 2 — Real-time Messaging (planned)
+## Phase 2 — Authentication & Real-time Direct Messaging ✅ (this phase)
 
-- Connect a real PostgreSQL database; replace `InMemoryUserRepository`
-- Implement `conversations`, `messages`, `groups` modules for real
-- WebSocket (or equivalent) transport for real-time message delivery and
-  presence
-- Message persistence, pagination, edit/delete, reactions
-- File upload backend (object storage) wired to `media` module
+- Connected a real PostgreSQL database (`pg`); replaced `InMemoryUserRepository`
+  with `PostgresUserRepository` — authentication is now persistent
+- Implemented `users` for real: own profile (view/edit), public profiles,
+  case-insensitive search (never leaks email addresses)
+- Implemented `conversations` for real: get-or-create direct (1:1)
+  conversation, list with last-message preview + unread count, membership
+  authorization
+- Implemented `messages` for real: send, paginated history, sent/delivered/read
+  receipts (`message_receipts` table)
+- Real-time transport: a WebSocket gateway (`ws`) authenticated during the
+  HTTP Upgrade handshake, pushing `message:new` / `message:delivered` /
+  `message:read` events; the frontend reconnects automatically
+- Frontend: real conversation list with unread badges, a "start new
+  conversation" user-search modal, a live chat thread with sent/delivered/
+  read ticks, profile editing
+- Versioned SQL migrations (`database/migrations/`) applied by
+  `backend/src/db/migrate.ts`, tracked in `schema_migrations`
+- Backend integration tests run against `pg-mem` (in-memory Postgres) —
+  no live database required to run `npm test`; realtime tests exercise a
+  real WebSocket server + real `ws` clients over loopback
+- **Still scaffolded:** `groups`, `media`, `notifications`, `privacy`
+  persistence, all AI features (honest `501`, not fake data)
+- **Not yet implemented:** group conversations, message edit/delete/reactions,
+  refresh-token rotation/revocation, file attachments
 
-## Phase 3 — Voice/Video & Notifications (planned)
+## Phase 3 — Groups, Voice/Video & Notifications (planned)
 
+- Group conversations (multi-member), building on the existing `groups` /
+  `group_members` schema
 - Calling infrastructure (signaling + media transport)
 - Push notification delivery (web push, mobile push)
 - Status/stories with expiry cleanup job
+- File attachments (media module wired to real object storage)
 
 ## Phase 4 — AI Features (planned)
 

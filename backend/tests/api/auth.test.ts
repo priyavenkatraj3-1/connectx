@@ -1,9 +1,16 @@
 import request from "supertest";
-import { describe, expect, it } from "vitest";
+import type { Express } from "express";
+import { beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../../src/app";
+import { createTestDb } from "../helpers/testDb";
 
 describe("Auth API", () => {
-  const app = createApp();
+  let app: Express;
+
+  beforeEach(async () => {
+    const db = await createTestDb();
+    app = createApp({ db }).app;
+  });
 
   const validSignup = {
     email: "newuser@example.com",
@@ -22,30 +29,30 @@ describe("Auth API", () => {
   it("rejects signup with a weak password", async () => {
     const res = await request(app)
       .post("/api/v1/auth/signup")
-      .send({ ...validSignup, email: "weak@example.com", password: "weak" });
+      .send({ ...validSignup, password: "weak" });
     expect(res.status).toBe(400);
   });
 
   it("rejects duplicate signup for the same email", async () => {
-    await request(app).post("/api/v1/auth/signup").send({ ...validSignup, email: "dupe@example.com" });
-    const res = await request(app).post("/api/v1/auth/signup").send({ ...validSignup, email: "dupe@example.com" });
+    await request(app).post("/api/v1/auth/signup").send(validSignup);
+    const res = await request(app).post("/api/v1/auth/signup").send(validSignup);
     expect(res.status).toBe(409);
   });
 
   it("logs in with correct credentials", async () => {
-    await request(app).post("/api/v1/auth/signup").send({ ...validSignup, email: "login@example.com" });
+    await request(app).post("/api/v1/auth/signup").send(validSignup);
     const res = await request(app)
       .post("/api/v1/auth/login")
-      .send({ email: "login@example.com", password: validSignup.password });
+      .send({ email: validSignup.email, password: validSignup.password });
     expect(res.status).toBe(200);
     expect(res.body.tokens.accessToken).toBeTypeOf("string");
   });
 
   it("rejects login with wrong password", async () => {
-    await request(app).post("/api/v1/auth/signup").send({ ...validSignup, email: "wrongpw@example.com" });
+    await request(app).post("/api/v1/auth/signup").send(validSignup);
     const res = await request(app)
       .post("/api/v1/auth/login")
-      .send({ email: "wrongpw@example.com", password: "WrongPass1" });
+      .send({ email: validSignup.email, password: "WrongPass1" });
     expect(res.status).toBe(401);
   });
 
@@ -55,13 +62,11 @@ describe("Auth API", () => {
   });
 
   it("allows access to a protected route with a valid token", async () => {
-    const signupRes = await request(app)
-      .post("/api/v1/auth/signup")
-      .send({ ...validSignup, email: "protected@example.com" });
+    const signupRes = await request(app).post("/api/v1/auth/signup").send(validSignup);
     const token = signupRes.body.tokens.accessToken as string;
 
     const res = await request(app).get("/api/v1/users/me").set("Authorization", `Bearer ${token}`);
     expect(res.status).toBe(200);
-    expect(res.body.userId).toBe(signupRes.body.user.id);
+    expect(res.body.id).toBe(signupRes.body.user.id);
   });
 });

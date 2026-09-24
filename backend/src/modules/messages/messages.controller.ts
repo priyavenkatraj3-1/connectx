@@ -1,0 +1,37 @@
+import type { Response } from "express";
+import type { AuthenticatedRequest } from "../../middleware/requireAuth";
+import type { MessagesService } from "./messages.service";
+import type { MarkReadInput, SendMessageInput } from "./messages.validation";
+
+export class MessagesController {
+  constructor(private readonly messagesService: MessagesService) {}
+
+  list = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    const conversationId = req.params.conversationId as string;
+    const before = typeof req.query.before === "string" ? req.query.before : undefined;
+    const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
+
+    const page = await this.messagesService.listMessages(conversationId, req.user!.userId, before, limit);
+    res.status(200).json(page);
+  };
+
+  send = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    const conversationId = req.params.conversationId as string;
+    const { body } = req.body as SendMessageInput;
+
+    const message = await this.messagesService.sendMessage({
+      conversationId,
+      senderId: req.user!.userId,
+      body,
+    });
+    res.status(201).json({ message });
+  };
+
+  markRead = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    const conversationId = req.params.conversationId as string;
+    const { upToMessageId } = req.body as MarkReadInput;
+
+    await this.messagesService.markRead(conversationId, req.user!.userId, upToMessageId);
+    res.status(204).send();
+  };
+}

@@ -1,20 +1,27 @@
 import cors from "cors";
 import express, { type Express } from "express";
 import helmet from "helmet";
+import { type Container, type ContainerOverrides, createContainer } from "./container";
 import { env } from "./config/env";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler";
 import { apiRateLimiter } from "./middleware/rateLimiter";
 import { aiRouter } from "./modules/ai/ai.routes";
-import { authRouter } from "./modules/auth/auth.routes";
-import { conversationsRouter } from "./modules/conversations/conversations.routes";
+import { createAuthRouter } from "./modules/auth/auth.routes";
+import { createConversationsRouter } from "./modules/conversations/conversations.routes";
 import { groupsRouter } from "./modules/groups/groups.routes";
 import { mediaRouter } from "./modules/media/media.routes";
-import { messagesRouter } from "./modules/messages/messages.routes";
+import { createMessagesRouter } from "./modules/messages/messages.routes";
 import { notificationsRouter } from "./modules/notifications/notifications.routes";
 import { privacyRouter } from "./modules/privacy/privacy.routes";
-import { usersRouter } from "./modules/users/users.routes";
+import { createUsersRouter } from "./modules/users/users.routes";
 
-export function createApp(): Express {
+export interface AppInstance {
+  app: Express;
+  container: Container;
+}
+
+export function createApp(overrides: ContainerOverrides = {}): AppInstance {
+  const container = createContainer(overrides);
   const app = express();
 
   app.use(helmet());
@@ -32,10 +39,10 @@ export function createApp(): Express {
   });
 
   const apiV1 = express.Router();
-  apiV1.use("/auth", authRouter);
-  apiV1.use("/users", usersRouter);
-  apiV1.use("/conversations", conversationsRouter);
-  apiV1.use("/messages", messagesRouter);
+  apiV1.use("/auth", createAuthRouter(container.authService));
+  apiV1.use("/users", createUsersRouter(container.usersService));
+  apiV1.use("/conversations", createConversationsRouter(container.conversationsService));
+  apiV1.use("/messages", createMessagesRouter(container.messagesService, container.conversationsService));
   apiV1.use("/groups", groupsRouter);
   apiV1.use("/media", mediaRouter);
   apiV1.use("/notifications", notificationsRouter);
@@ -47,5 +54,5 @@ export function createApp(): Express {
   app.use(notFoundHandler);
   app.use(errorHandler);
 
-  return app;
+  return { app, container };
 }

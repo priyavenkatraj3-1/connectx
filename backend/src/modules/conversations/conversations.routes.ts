@@ -1,14 +1,29 @@
 import { Router } from "express";
 import { requireAuth } from "../../middleware/requireAuth";
-import { notImplemented } from "../../utils/notImplemented";
+import { requireConversationMember } from "../../middleware/requireConversationMember";
+import { validateBody } from "../../middleware/validate";
+import { asyncHandler } from "../../utils/asyncHandler";
+import { ConversationsController } from "./conversations.controller";
+import type { ConversationsService } from "./conversations.service";
+import { createDirectConversationSchema } from "./conversations.validation";
 
-/**
- * Route shapes for conversation management. Handlers are intentionally
- * unimplemented placeholders in Phase 1 — see conversation.interface.ts for
- * the service contract that will back these routes.
- */
-export const conversationsRouter = Router();
+export function createConversationsRouter(conversationsService: ConversationsService): Router {
+  const controller = new ConversationsController(conversationsService);
+  const router = Router();
 
-conversationsRouter.get("/", requireAuth, notImplemented("List conversations"));
-conversationsRouter.post("/", requireAuth, notImplemented("Create conversation"));
-conversationsRouter.get("/:conversationId", requireAuth, notImplemented("Get conversation"));
+  router.get("/", requireAuth, asyncHandler(controller.list));
+  router.post(
+    "/direct",
+    requireAuth,
+    validateBody(createDirectConversationSchema),
+    asyncHandler(controller.createDirect)
+  );
+  router.get(
+    "/:conversationId",
+    requireAuth,
+    asyncHandler(requireConversationMember(conversationsService)),
+    asyncHandler(controller.getById)
+  );
+
+  return router;
+}

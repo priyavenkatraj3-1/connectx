@@ -22,3 +22,24 @@ export function validateBody(schema: ZodSchema) {
     next();
   };
 }
+
+/**
+ * Validates `req.query` against a Zod schema. Express types `req.query` as
+ * read-only-ish `ParsedQs`; we validate it but deliberately don't reassign
+ * it (unlike validateBody) since Express 4 getters make that unreliable —
+ * handlers should re-parse via the schema if they need the typed value.
+ */
+export function validateQuery(schema: ZodSchema) {
+  return (req: Request, _res: Response, next: NextFunction): void => {
+    const result = schema.safeParse(req.query);
+
+    if (!result.success) {
+      const message = result.error.issues
+        .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
+        .join("; ");
+      throw new AppError(`Validation failed: ${message}`, 400);
+    }
+
+    next();
+  };
+}

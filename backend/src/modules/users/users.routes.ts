@@ -1,19 +1,21 @@
 import { Router } from "express";
-import { requireAuth, type AuthenticatedRequest } from "../../middleware/requireAuth";
+import { requireAuth } from "../../middleware/requireAuth";
+import { validateBody, validateQuery } from "../../middleware/validate";
 import { asyncHandler } from "../../utils/asyncHandler";
+import { UsersController } from "./users.controller";
+import type { UsersService } from "./users.service";
+import { searchUsersQuerySchema, updateProfileSchema } from "./users.validation";
 
-export const usersRouter = Router();
+export function createUsersRouter(usersService: UsersService): Router {
+  const controller = new UsersController(usersService);
+  const router = Router();
 
-/**
- * Returns the identity of the currently authenticated user. This is a thin
- * Phase 1 placeholder demonstrating the protected-route pattern; full
- * profile retrieval (bio, avatar, status, privacy settings) lands once the
- * `user_profiles` table (see docs/database.md) is backed by a real database.
- */
-usersRouter.get(
-  "/me",
-  requireAuth,
-  asyncHandler(async (req: AuthenticatedRequest, res) => {
-    res.status(200).json({ userId: req.user?.userId });
-  })
-);
+  // Order matters: /search and /me must be registered before /:userId so
+  // they aren't swallowed by the param route.
+  router.get("/search", requireAuth, validateQuery(searchUsersQuerySchema), asyncHandler(controller.search));
+  router.get("/me", requireAuth, asyncHandler(controller.getMe));
+  router.patch("/me", requireAuth, validateBody(updateProfileSchema), asyncHandler(controller.updateMe));
+  router.get("/:userId", requireAuth, asyncHandler(controller.getById));
+
+  return router;
+}
