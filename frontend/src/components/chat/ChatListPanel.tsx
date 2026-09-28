@@ -6,19 +6,26 @@ import { EmptyState } from "../common/EmptyState";
 import { ErrorState } from "../common/ErrorState";
 import { LoadingState } from "../common/LoadingState";
 import { Avatar } from "../ui/Avatar";
-import { ChatIcon, PlusIcon, SearchIcon } from "../ui/icons";
+import { NewGroupModal } from "../groups/NewGroupModal";
+import { ChatIcon, PlusIcon, SearchIcon, UsersIcon } from "../ui/icons";
 import { NewConversationModal } from "./NewConversationModal";
 import { formatTimestamp } from "../../utils/formatTime";
+import {
+  formatLastMessagePreview,
+  getConversationAvatarUrl,
+  getConversationTitle,
+} from "../../utils/conversationDisplay";
 
 export function ChatListPanel() {
   const { user } = useAuth();
   const { conversations, isLoading, error, refresh } = useConversations();
   const { conversationId: activeConversationId } = useParams();
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isGroupModalOpen, setIsGroupModalOpen] = useState(false);
   const [filter, setFilter] = useState("");
 
   const visible = conversations.filter((c) =>
-    c.otherParticipant.displayName.toLowerCase().includes(filter.trim().toLowerCase())
+    getConversationTitle(c).toLowerCase().includes(filter.trim().toLowerCase())
   );
 
   return (
@@ -29,14 +36,26 @@ export function ChatListPanel() {
     >
       <div className="flex items-center justify-between px-4 py-4">
         <h1 className="text-xl font-semibold text-slate-900 dark:text-slate-100">Chats</h1>
-        <button
-          type="button"
-          onClick={() => setIsModalOpen(true)}
-          className="flex h-9 w-9 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
-          aria-label="Start a new conversation"
-        >
-          <PlusIcon />
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => setIsGroupModalOpen(true)}
+            className="flex h-9 w-9 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+            aria-label="New group"
+            title="New group"
+          >
+            <UsersIcon />
+          </button>
+          <button
+            type="button"
+            onClick={() => setIsModalOpen(true)}
+            className="flex h-9 w-9 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+            aria-label="Start a new conversation"
+            title="New chat"
+          >
+            <PlusIcon />
+          </button>
+        </div>
       </div>
 
       <div className="px-4 pb-3">
@@ -74,10 +93,8 @@ export function ChatListPanel() {
           !error &&
           visible.map((conversation) => {
             const isActive = conversation.id === activeConversationId;
-            const isOwnLastMessage = conversation.lastMessage?.senderId === user?.id;
-            const preview = conversation.lastMessage
-              ? `${isOwnLastMessage ? "You: " : ""}${conversation.lastMessage.body ?? ""}`
-              : "No messages yet";
+            const title = getConversationTitle(conversation);
+            const preview = formatLastMessagePreview(conversation, conversation.lastMessage, user?.id);
 
             return (
               <NavLink
@@ -87,14 +104,14 @@ export function ChatListPanel() {
                   isActive ? "bg-brand-50 dark:bg-brand-950" : "hover:bg-slate-100 dark:hover:bg-slate-800"
                 }`}
               >
-                <Avatar
-                  name={conversation.otherParticipant.displayName}
-                  imageUrl={conversation.otherParticipant.avatarUrl ?? undefined}
-                />
+                <Avatar name={title} imageUrl={getConversationAvatarUrl(conversation)} />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-baseline justify-between gap-2">
-                    <p className="truncate text-sm font-medium text-slate-900 dark:text-slate-100">
-                      {conversation.otherParticipant.displayName}
+                    <p className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-slate-900 dark:text-slate-100">
+                      {conversation.type === "group" && (
+                        <UsersIcon width={14} height={14} className="shrink-0 text-slate-400" aria-label="Group" />
+                      )}
+                      <span className="truncate">{title}</span>
                     </p>
                     <span className="shrink-0 text-xs text-slate-400">{formatTimestamp(conversation.updatedAt)}</span>
                   </div>
@@ -113,6 +130,7 @@ export function ChatListPanel() {
       </div>
 
       {isModalOpen && <NewConversationModal onClose={() => setIsModalOpen(false)} />}
+      {isGroupModalOpen && <NewGroupModal onClose={() => setIsGroupModalOpen(false)} />}
     </div>
   );
 }

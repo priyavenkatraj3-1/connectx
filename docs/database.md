@@ -43,18 +43,67 @@ with no receipt row for a recipient is "sent" only; a `delivered` row is
 written the instant that recipient's WebSocket connection receives it; a
 `read` row is written when they mark the conversation read
 (`MessagesRepository.markReadUpTo`, upserted so a status never regresses
-from `read` back to `delivered`). For a direct (1:1) conversation there is
-exactly one possible recipient per message, so `MessagesRepository` finds
-it with `r.user_id != m.sender_id` rather than needing to know the
-recipient's ID up front — a query shape that will need to change once
-group conversations (multiple recipients) exist.
+from `read` back to `delivered`).
+
+Since Phase 3 a message can have many recipients, so the status shown to
+the sender is an **aggregate** computed in `MessagesRepository`
+(`aggregateStatus`): the recipients are the conversation's active members,
+other than the sender, who had joined by the time the message was sent;
+the message is `delivered`/`read` only when every one of them has a
+receipt in that state. For a direct conversation (one recipient) this is
+exactly the Phase 2 behavior.
+
+`message_mentions` (Phase 3) records which users a message @mentions —
+one row per (message, user), validated server-side to be conversation
+members. Replies use the Phase 1 `messages.reply_to_message_id` column
+(now indexed). Deleting a message is a soft delete: `deleted_at` is set
+and `body` is cleared, so replies keep a valid foreign key but can no
+longer show the original content.
 
 ### Groups
 
 | Table | Purpose |
 |---|---|
 | `groups` | 1:1 with a `conversations` row of type `group` — keeps group-specific metadata (name, description, avatar) out of the generic `conversations` table |
-| `group_members` | Role-based membership (`owner` / `admin` / `member`) |
+| `group_members` | The role (`owner` / `admin` / `member`) of each *active* group member |
+
+**Membership model (Phase 3).** `conversation_members` remains the single
+source of truth for *access* — "can this user read/send in this
+conversation?" (`left_at IS NULL`) — for direct and group conversations
+alike, so every Phase 2 authorization check (`requireConversationMember`)
+covers groups unchanged. `group_members` holds only the *role*, and a row
+exists there only while the user is an active member. `GroupsRepository`
+writes both tables in the same transaction for every create / add /
+remove / leave, so they can't drift.
+
+Integrity rules enforced by the database, not just the app:
+
+- `PRIMARY KEY (group_id, user_id)` — no duplicate memberships.
+- `uq_group_members_one_owner` — a partial unique index on
+  `group_members(group_id) WHERE role = 'owner'`: at most one owner per
+  group. When an owner leaves, their row is deleted *before* the successor
+  is promoted, inside one transaction, so the index is never violated.
+- `CHECK (role IN ('owner','admin','member'))` and
+  `groups.conversation_id UNIQUE` (one group per conversation).
+
+Leaving/removal sets `conversation_members.left_at` rather than deleting
+the row. Re-adding someone clears `left_at` and resets `joined_at` and
+their read marker — and because history visibility is "messages sent at or
+after `joined_at`", a re-added member does not regain access to what was
+said before or while they were away.
+
+### Attachments (media foundation, Phase 3)
+
+`attachments` existed since Phase 1 but was never written to; migration
+002 completes it with `conversation_id` (NOT NULL, `ON DELETE CASCADE`),
+`original_filename` (sanitized, display-only), `kind`
+(`image`/`video`/`audio`/`document`/`file`), and `updated_at`, plus a
+unique index on `storage_key`. An upload creates a row with
+`message_id = NULL`; sending a message sets `message_id` with a
+conditional `UPDATE … WHERE message_id IS NULL` so the same upload can't be
+attached twice concurrently. The bytes live outside the database behind
+the `StorageProvider` interface (local disk in development); the row
+stores only the opaque `storage_key` (`<conversationId>/<attachmentId>`).
 
 ### Status / stories, notifications, privacy
 
@@ -98,18 +147,49 @@ Three reasons, all deliberate:
 - `sessions(expires_at)` supports a cleanup job that purges expired
   sessions without a full table scan.
 
-## Testing against this schema without a real database
+## Migrations
+
+| File | Phase | Contents |
+|---|---|---|
+| `001_initial_schema.sql` | 1–2 | Every Phase 1/2 table |
+| `002_groups_media.sql` | 3 | `groups.updated_at`, `group_members.updated_at`, one-owner partial unique index, active-members index, `message_mentions`, reply index, attachment columns + indexes. Purely additive — no existing data is modified |
+
+Apply with `npm run db:migrate --workspace=backend` (idempotent; each file
+runs once, in its own transaction, recorded in `schema_migrations`).
+
+## Timestamp comparisons stay in SQL
+
+PostgreSQL `timestamptz` has microsecond precision; a JavaScript `Date`
+has millisecond precision. A timestamp read into JS and passed back as a
+query parameter is therefore truncated, and `created_at > $cutoff` can
+wrongly include the very row the cutoff came from. Repositories compare
+timestamps inside SQL instead (e.g. `created_at > (SELECT created_at FROM
+messages WHERE id = $3)`, `created_at >= (SELECT joined_at FROM
+conversation_members …)`). This fixed a Phase 2 bug where the last-read
+message kept counting as unread on real PostgreSQL — invisible under
+pg-mem, which stores milliseconds.
+
+## Testing against this schema
 
 Backend integration tests apply every migration to a fresh `pg-mem`
-instance (an in-memory PostgreSQL-compatible engine) per test file — see
+instance (an in-memory PostgreSQL-compatible engine) — see
 `backend/tests/helpers/testDb.ts`. This exercises the real SQL in the
 repositories (joins, `ON CONFLICT`, transactions) without requiring a
 network database in CI or on a fresh clone. Production always talks to a
 real PostgreSQL server via `pg`; `pg-mem` is test-only.
 
+pg-mem is not perfect (for example it mis-evaluates `id = $1 AND
+message_id IS NULL` via an index once the table has several rows — see the
+comment in `MediaRepository.attachToMessage`), so the same suite can also
+run against **real PostgreSQL**: set `TEST_DATABASE_URL` and run
+`npx vitest run --no-file-parallelism` in `backend/`. Each call re-creates
+a throwaway schema (`connectx_test_w<n>`) inside that database and never
+touches other schemas; drop it afterwards with
+`DROP SCHEMA connectx_test_w1 CASCADE`.
+
 ## Not yet in the schema (intentionally)
 
-Call/voice metadata, message search indexes (would likely need a
+Call/voice metadata, communities/channels, message search indexes (would likely need a
 full-text or vector index once "Ask Your Chats" is implemented), and
 payment/billing tables are out of scope for the current phase and are not
 modeled yet — adding them speculatively would just be guessing at

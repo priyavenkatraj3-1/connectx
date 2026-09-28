@@ -5,8 +5,7 @@ status/stories, voice/video, and privacy-conscious, opt-in AI features —
 built with its own visual identity and architecture (not a clone of any
 existing product).
 
-**This repository is at Phase 2: Authentication & Real-time Direct
-Messaging.** See [docs/development-phases.md](docs/development-phases.md)
+**This repository is at Phase 3: Groups & Media Foundation.** See [docs/development-phases.md](docs/development-phases.md)
 for the full roadmap and what's planned next.
 
 ## Project vision
@@ -52,20 +51,22 @@ Full details: [docs/architecture.md](docs/architecture.md).
 backend/src/
 ├── config/        environment config
 ├── middleware/    auth guard, conversation-membership guard, error handling,
-│                  rate limiting, validation, upload checks
+│                  rate limiting, validation
 ├── db/            PostgreSQL connection pool + migration runner
-├── realtime/      WebSocket gateway, connection registry, event types
+├── realtime/      WebSocket gateway, connection registry, event types, broadcast
 ├── container.ts   dependency-injection wiring (repositories -> services -> routers)
 ├── modules/       one folder per domain (auth, users, conversations, messages,
-│                  groups, media, notifications, ai, privacy)
+│                  groups, media (+ storage/), notifications, ai, privacy)
 └── server.ts, app.ts
 
 frontend/src/
-├── components/    ui/, layout/, chat/, common/
+├── components/    ui/, layout/, chat/, groups/, media/, common/
 ├── pages/         Landing, Login, Signup, and authenticated app/ views
 ├── context/       AuthContext, RealtimeContext, ConversationsContext
 ├── routes/        ProtectedRoute
-├── services/      API client + per-domain service wrappers (auth, users, conversations, messages)
+├── services/      API client + per-domain service wrappers (auth, users, conversations,
+│                  messages, groups, media)
+├── hooks/, utils/
 └── types/
 ```
 
@@ -81,9 +82,9 @@ npm install
 cp backend/.env.example backend/.env
 ```
 
-### Database setup (required for Phase 2)
+### Database setup (required)
 
-Phase 2 uses a real, persistent PostgreSQL database — there is no
+ConnectX uses a real, persistent PostgreSQL database — there is no
 in-memory fallback for production use. You need:
 
 1. **A running PostgreSQL server.** Either:
@@ -96,9 +97,14 @@ in-memory fallback for production use. You need:
    ```bash
    npm run db:migrate --workspace=backend
    ```
-   This is idempotent — safe to re-run. It creates every table defined in
-   [database/migrations](database/migrations) and records what's been
-   applied in a `schema_migrations` table.
+   This is idempotent — safe to re-run. It applies every file in
+   [database/migrations](database/migrations) that hasn't run yet, in
+   order, and records it in a `schema_migrations` table.
+
+   **Upgrading an existing Phase 2 database to Phase 3:** just run the same
+   command. It skips `001_initial_schema.sql` and applies
+   `002_groups_media.sql`, which is purely additive (new columns, indexes
+   and the `message_mentions` table) — no existing rows are changed.
 
 If `DATABASE_URL` is missing or unreachable, `npm run dev:backend` /
 `npm start` fails immediately with a message telling you exactly what to
@@ -107,6 +113,28 @@ configure, rather than starting in a broken state.
 Automated tests do **not** need a real database — they run against
 `pg-mem`, an in-memory Postgres-compatible engine, so `npm test` works
 without any of the above.
+
+### Running backend tests against real PostgreSQL (optional)
+
+pg-mem doesn't behave exactly like PostgreSQL, so the backend suite can
+also run against a real server. Each test worker uses a throwaway schema
+(`connectx_test_w<n>`) that is dropped and re-created per test — nothing
+outside it is touched:
+
+```bash
+cd backend
+TEST_DATABASE_URL=postgresql://connectx:connectx@localhost:5432/connectx_dev npx vitest run --no-file-parallelism
+# afterwards: DROP SCHEMA connectx_test_w1 CASCADE;
+```
+
+### Media storage (development)
+
+Uploaded files are stored on local disk under `UPLOAD_DIR` (default
+`backend/uploads/`, gitignored), as `<conversationId>/<attachmentId>`
+files; metadata lives in the `attachments` table. The storage layer sits
+behind a `StorageProvider` interface so it can be replaced with S3/object
+storage later. Back this directory up together with the database —
+deleting it breaks existing attachments.
 
 ### Environment variables
 
@@ -120,11 +148,15 @@ ones:
 | `DATABASE_URL` | PostgreSQL connection string — **required**, see above |
 | `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` | Required — long random secrets for signing tokens |
 | `BCRYPT_SALT_ROUNDS` | Password hashing cost factor (default `12`) |
-| `AI_PROVIDER` | AI provider selector; `none` in Phase 2 |
+| `MAX_UPLOAD_SIZE_MB` | Upload size limit (default `25`) |
+| `UPLOAD_DIR` | Local media storage directory (default `uploads`, relative to `backend/`) |
+| `AI_PROVIDER` | AI provider selector; `none` until the AI phase |
 
 The frontend reads `VITE_API_BASE_URL` (defaults to
 `http://localhost:4000/api/v1`) and `VITE_WS_URL` (defaults to the same
-host with `ws://` and `/ws`).
+host with `ws://` and `/ws`). `VITE_MAX_UPLOAD_MB` (default `25`) only
+drives the client-side size pre-check — keep it equal to the backend's
+`MAX_UPLOAD_SIZE_MB`; the server always enforces its own limit.
 
 ## Development commands
 
@@ -146,38 +178,79 @@ npm test
 npm run build
 ```
 
-## Currently implemented features (Phase 2)
+## Currently implemented features
 
-Everything from Phase 1, now backed by a real, persistent PostgreSQL
-database, plus:
+### Phase 3 — Groups & media foundation
 
-- **Persistent authentication** — signup/login backed by a real `users`
-  table (no more in-memory store)
-- **User profiles** — view and edit your display name, bio, and status
-  message (`GET/PATCH /api/v1/users/me`)
-- **User search** — find other users by name or email (`GET /api/v1/users/search`)
-- **1:1 conversations** — start (or resume) a direct conversation with
-  another user; duplicate-conversation creation is prevented server-side
-- **Persistent messages** — sent messages are stored in PostgreSQL and
-  survive restarts
-- **Real-time messaging over WebSocket** — new messages arrive instantly
-  for connected recipients (`ws://.../ws?token=<accessToken>`)
-- **Sent / delivered / read receipts** — a message's status reflects
-  whether the recipient was online when it was sent, and updates to "read"
-  when they open the conversation
-- **Conversation list with unread counts** — sorted by recent activity,
-  with a per-conversation unread badge and a sidebar total
-- **Authorization** — every conversation/message route checks that the
-  requesting user is an actual member of that conversation (403 otherwise)
+- **Group conversations** — create a group (name, description, avatar URL,
+  members), view details and members, edit details, add and remove
+  members, leave, with **owner / admin / member roles** (promote/demote).
+  When the owner leaves, ownership passes to the longest-standing admin
+  (or member). Every rule is enforced server-side and backed by database
+  constraints (no duplicate memberships, at most one owner per group).
+- **Group messaging** on the same stack as direct chats: persistent
+  messages, real-time delivery to every member, sender names, aggregate
+  delivered/read ticks (only once *everyone* has received/read), per-member
+  unread counts, `Alice: …` previews, ordering by latest message. Members
+  only see history from when they joined.
+- **Replies, @mentions, edit and delete** (author only) — in groups and
+  direct chats.
+- **Media foundation** — attach images, videos, audio files, documents and
+  generic files: validated on the server (size, extension allow-list, file
+  contents must match the extension — the browser's MIME type isn't
+  trusted), stored behind a replaceable storage abstraction (local disk in
+  development), downloadable only by conversation members. The UI shows a
+  preview, upload progress and clear error states, and never shows a
+  rejected upload as sent.
+- **Realtime events** for edits, deletions, group membership and role
+  changes, group metadata, conversation added/removed, and cross-device
+  unread sync.
 
-See [docs/api.md](docs/api.md) for the full endpoint list and
+### Phase 2 — Authentication & real-time direct messaging
+
+- **Persistent authentication** (PostgreSQL `users` table), **profiles**
+  (`GET/PATCH /api/v1/users/me`), **user search**
+- **1:1 conversations**, **persistent messages**, **real-time delivery over
+  WebSocket** (`ws://.../ws?token=<accessToken>`)
+- **Sent / delivered / read receipts**, **conversation list with unread
+  counts**
+- **Authorization** — every conversation/message route checks active
+  membership (403 otherwise)
+
+See [docs/api.md](docs/api.md) for every endpoint and event, and
 [docs/security.md](docs/security.md) for what's covered.
+
+## Known limitations (Phase 3)
+
+What this phase does **not** do:
+
+- **No malware scanning** of uploads — only format validation (extension +
+  magic bytes). No thumbnails, image re-encoding/EXIF stripping, or video
+  transcoding.
+- **No in-app voice recording** — audio *files* can be attached and played;
+  recording a voice note in the browser is not built.
+- **Local-disk media storage** only (single instance); no object-storage
+  provider yet. No cleanup job for uploads that are never sent. One
+  attachment per message.
+- **Group avatar is a URL field only** — no avatar image upload.
+- **No explicit ownership transfer** — ownership only moves when the owner
+  leaves. Group admins **cannot delete other people's messages**.
+- **Delivery receipts** are only recorded for recipients online at the
+  moment of sending (same as Phase 2) — reconnecting later doesn't mark
+  older messages delivered; reading them still marks them read.
+- **Deleted messages** simply disappear from the thread (replies to them do
+  show "Original message was deleted").
+- **Mentions** create no notifications (notifications are Phase 4).
+- **No end-to-end encryption** for any content, including media.
+- The group/media UI is verified by component tests plus an API/WebSocket
+  smoke test against the real server — **not** by an automated browser
+  run. Use the manual test script below.
 
 ## What's only scaffolded
 
-Groups, media storage, notifications, privacy settings persistence, and
-all AI features remain typed interfaces and route shapes only — routes
-honestly respond `501`, not fake data. See [docs/api.md](docs/api.md) and
+Notifications, privacy settings persistence, and all AI features remain
+typed interfaces and route shapes only — routes honestly respond `501`,
+not fake data. Calls, status/stories and communities aren't started. See
 [docs/development-phases.md](docs/development-phases.md) for when each
 lands.
 
@@ -195,20 +268,22 @@ described as E2E-encrypted until that's implemented and verified. See
 [docs/security.md](docs/security.md) for exactly what is and isn't in
 place today.
 
-## Manual two-user testing
+## Manual testing
 
-For a hands-on check that real-time delivery, receipts, and unread counts
-actually work between two independent accounts, see
-[docs/manual-testing-phase2.md](docs/manual-testing-phase2.md).
+- Phase 2 (two users, direct chat): [docs/manual-testing-phase2.md](docs/manual-testing-phase2.md)
+- Phase 3 (three users, groups, roles, media): [docs/manual-testing-phase3.md](docs/manual-testing-phase3.md)
 
 ## Planned phases
 
-1. **Foundation** — structure, auth, UI shell, schema design
-2. **Authentication & Real-time Direct Messaging** (this phase) — persistent
-   auth, profiles, search, 1:1 conversations, real-time messages, receipts
-3. **Groups, Voice/Video & Notifications** — group chat, calling, push
-   notifications, status/stories
-4. **AI Features** — a real AI provider wired into every interface above
-5. **Multi-device, Scale & Productivity** — session management, mobile/desktop clients, scaling
+1. **Foundation** ✅ — structure, auth, UI shell, schema design
+2. **Authentication & Real-time Direct Messaging** ✅ — persistent auth,
+   profiles, search, 1:1 conversations, real-time messages, receipts
+3. **Groups & Media Foundation** ✅ (this phase) — group chat, roles,
+   replies/mentions/edit/delete, validated media uploads
+4. **Calls, Status & Notifications** — voice/video calls, screen sharing,
+   status/stories, push notifications, communities, media follow-ups
+5. **AI Features** — a real AI provider wired into every interface
+6. **Multi-device, Scale & Productivity** — session management,
+   mobile/desktop clients, scaling, productivity tools
 
 Full detail: [docs/development-phases.md](docs/development-phases.md).

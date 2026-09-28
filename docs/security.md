@@ -38,10 +38,40 @@
 - **Security headers** — `helmet()` is applied to every response.
 - **CORS** — restricted to a single configured origin (`CLIENT_ORIGIN`),
   not a wildcard.
-- **Upload validation contract** — `middleware/uploadValidation.ts` defines
-  size limits, an allowlist of MIME types, and filename sanitization
-  (rejects path separators and `..`) ahead of any real storage backend
-  being wired up.
+- **Group authorization (Phase 3)** — every group operation is checked in
+  `GroupsService` against the caller's current role (permission table in
+  [api.md](./api.md#groups--modulesgroups-phase-3)): only owners/admins
+  edit details or add members, admins can remove only plain members, only
+  the owner changes roles or removes admins, and nobody can remove the
+  owner. Membership and roles are also protected by the database (primary
+  key against duplicate membership, a partial unique index allowing at most
+  one owner). The UI hides controls you can't use, but that is cosmetic —
+  tests call the API directly to prove the server refuses.
+- **Group message authorization** — group conversations reuse the Phase 2
+  membership gate, so non-members get `403` on read, send, edit, delete
+  and mark-read. `MessagesService` re-checks membership itself (not only
+  the HTTP middleware), which also closes a Phase 2 gap: the WebSocket
+  `message:read` client event previously reached `markRead` without any
+  membership check. Only a message's author can edit or delete it.
+- **History visibility** — members only see messages (and their media)
+  sent at or after they joined, so someone added to — or re-added to — a
+  group can't read earlier conversation.
+- **Upload validation (Phase 3)** — `modules/media/file-validation.ts`:
+  size limit (`MAX_UPLOAD_SIZE_MB`, enforced by the body parser and again
+  on the bytes), an extension allow-list (no SVG/HTML/executables/scripts),
+  and **magic-byte checks** that the file contents match the extension.
+  The client-declared MIME type is never trusted: a contradicting
+  declaration is rejected, and the stored type is the server's.
+  Filenames are sanitized for display only — bytes are stored under a
+  server-generated `<conversationId>/<attachmentId>` key, and the local
+  storage provider rejects any key not matching that pattern and any path
+  resolving outside its root (path traversal is prevented twice).
+- **Media access control** — downloads require active membership of the
+  attachment's conversation; unsent uploads are visible only to their
+  uploader; sent media follows its message's visibility; only the uploader
+  can delete an unsent upload. Responses carry `nosniff`, `private,
+  no-store`, a sandboxing CSP, and documents are served as downloads
+  (`Content-Disposition: attachment`), not rendered inline.
 - **Consent-gated AI design** — see [ai-roadmap.md](./ai-roadmap.md); AI
   features are structurally required to check `privacy_settings` before
   acting.
@@ -51,7 +81,8 @@
 Be precise about this — overstating security posture is worse than having
 none:
 
-- **No end-to-end encryption.** Messages are stored as plaintext in
+- **No end-to-end encryption** — for direct chats, groups, or media.
+  Messages are stored as plaintext in
   PostgreSQL and transmitted over TLS only if you deploy behind TLS
   yourself (not configured in this repo). Do not describe ConnectX as
   E2E-encrypted until it demonstrably is.
@@ -61,8 +92,20 @@ none:
 - **No CSRF protection** — irrelevant while there is no cookie-based
   session, but must be revisited if cookies are introduced later.
 - **No audit logging.**
-- **No file storage backend**, so `uploadValidation` is exercised by unit
-  tests but not by a real upload path yet.
+- **No malware / virus scanning of uploads.** Validation checks format
+  (extension + magic bytes) only. A well-formed PDF, Office document or
+  ZIP can still contain malicious content; treat downloaded files as
+  untrusted.
+- **Media is not encrypted at rest** by the application — files sit on
+  local disk (development storage) as uploaded. Images are not re-encoded,
+  so embedded metadata (e.g. EXIF location) is preserved.
+- **No cleanup of abandoned uploads** — an upload that's never sent stays
+  (private to its uploader) until they delete it; no background job purges
+  them yet.
+- **No per-user upload quota or upload-specific rate limit** beyond the
+  global API limiter.
+- **Group admins cannot moderate (delete) other people's messages** —
+  deletion is author-only in this phase.
 - **No account recovery / password reset flow.**
 - **No 2FA.**
 - **No per-user rate limiting on message sending** — only the global/IP

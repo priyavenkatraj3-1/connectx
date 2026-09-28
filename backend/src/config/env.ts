@@ -21,6 +21,8 @@ interface EnvConfig {
     apiKey: string | undefined;
   };
   maxUploadSizeMb: number;
+  /** Root directory for the local-disk media storage provider (development storage; see modules/media/storage). */
+  uploadDir: string;
 }
 
 function readEnv(name: string, fallback?: string): string {
@@ -54,4 +56,5 @@ export const env: EnvConfig = {
     apiKey: process.env.AI_PROVIDER_API_KEY,
   },
   maxUploadSizeMb: Number(process.env.MAX_UPLOAD_SIZE_MB ?? 25),
+  uploadDir: process.env.UPLOAD_DIR ?? "uploads",
 };

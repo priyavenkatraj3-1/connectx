@@ -1,11 +1,17 @@
 import { Router } from "express";
 import { requireAuth } from "../../middleware/requireAuth";
 import { requireConversationMember, type MembershipChecker } from "../../middleware/requireConversationMember";
-import { validateBody, validateQuery } from "../../middleware/validate";
+import { validateBody, validateParams, validateQuery } from "../../middleware/validate";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { MessagesController } from "./messages.controller";
 import type { MessagesService } from "./messages.service";
-import { listMessagesQuerySchema, markReadSchema, sendMessageSchema } from "./messages.validation";
+import {
+  editMessageSchema,
+  listMessagesQuerySchema,
+  markReadSchema,
+  messageParamsSchema,
+  sendMessageSchema,
+} from "./messages.validation";
 
 export function createMessagesRouter(messagesService: MessagesService, membershipChecker: MembershipChecker): Router {
   const controller = new MessagesController(messagesService);
@@ -32,6 +38,21 @@ export function createMessagesRouter(messagesService: MessagesService, membershi
     guardMembership,
     validateBody(markReadSchema),
     asyncHandler(controller.markRead)
+  );
+  router.patch(
+    "/:conversationId/:messageId",
+    requireAuth,
+    validateParams(messageParamsSchema),
+    guardMembership,
+    validateBody(editMessageSchema),
+    asyncHandler(controller.edit)
+  );
+  router.delete(
+    "/:conversationId/:messageId",
+    requireAuth,
+    validateParams(messageParamsSchema),
+    guardMembership,
+    asyncHandler(controller.remove)
   );
 
   return router;

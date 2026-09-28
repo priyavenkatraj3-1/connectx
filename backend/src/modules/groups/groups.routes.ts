@@ -1,10 +1,45 @@
 import { Router } from "express";
 import { requireAuth } from "../../middleware/requireAuth";
-import { notImplemented } from "../../utils/notImplemented";
+import { validateBody, validateParams } from "../../middleware/validate";
+import { asyncHandler } from "../../utils/asyncHandler";
+import { GroupsController } from "./groups.controller";
+import type { GroupsService } from "./groups.service";
+import {
+  addMembersSchema,
+  changeRoleSchema,
+  createGroupSchema,
+  groupMemberParamsSchema,
+  groupParamsSchema,
+  updateGroupSchema,
+} from "./groups.validation";
 
-export const groupsRouter = Router();
+/** All authorization (membership + role checks) happens in GroupsService — see the permission table there. */
+export function createGroupsRouter(groupsService: GroupsService): Router {
+  const controller = new GroupsController(groupsService);
+  const router = Router();
+  const groupParams = validateParams(groupParamsSchema);
+  const memberParams = validateParams(groupMemberParamsSchema);
 
-groupsRouter.post("/", requireAuth, notImplemented("Create group"));
-groupsRouter.post("/:groupId/members", requireAuth, notImplemented("Add group member"));
-groupsRouter.delete("/:groupId/members/:userId", requireAuth, notImplemented("Remove group member"));
-groupsRouter.get("/:groupId/members", requireAuth, notImplemented("List group members"));
+  router.post("/", requireAuth, validateBody(createGroupSchema), asyncHandler(controller.create));
+  router.get("/:groupId", requireAuth, groupParams, asyncHandler(controller.get));
+  router.patch("/:groupId", requireAuth, groupParams, validateBody(updateGroupSchema), asyncHandler(controller.update));
+  router.get("/:groupId/members", requireAuth, groupParams, asyncHandler(controller.listMembers));
+  router.post(
+    "/:groupId/members",
+    requireAuth,
+    groupParams,
+    validateBody(addMembersSchema),
+    asyncHandler(controller.addMembers)
+  );
+  router.delete("/:groupId/members/:userId", requireAuth, memberParams, asyncHandler(controller.removeMember));
+  router.patch(
+    "/:groupId/members/:userId/role",
+    requireAuth,
+    memberParams,
+    validateBody(changeRoleSchema),
+    asyncHandler(controller.changeRole)
+  );
+  router.post("/:groupId/leave", requireAuth, groupParams, asyncHandler(controller.leave));
+
+  return router;
+}

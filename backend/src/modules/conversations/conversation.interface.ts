@@ -11,10 +11,10 @@ export interface Conversation {
 }
 
 /**
- * Contract for conversation management. Implemented for real in Phase 2
- * (direct conversations only — group conversations remain a later phase,
- * see docs/development-phases.md) by ConversationsService, backed by
- * ConversationsRepository.
+ * Contract for conversation management, implemented by ConversationsService.
+ * Direct conversations are created here; group conversations are created
+ * through GroupsService (Phase 3) and then listed/read through this same
+ * service. Backed by ConversationsRepository.
  */
 export interface ConversationService {
   getOrCreateDirectConversation(userId: string, otherUserId: string): Promise<Conversation>;

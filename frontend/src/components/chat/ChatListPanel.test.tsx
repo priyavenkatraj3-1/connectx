@@ -64,4 +64,25 @@ describe("ChatListPanel", () => {
     expect(screen.getByText("See you tomorrow")).toBeInTheDocument();
     expect(screen.getByText("3")).toBeInTheDocument();
   });
+
+  it("renders a group with its name, a sender-labelled preview, and media previews", async () => {
+    seedAuthenticatedSession();
+    const group: ConversationSummary = {
+      id: "conv-g1",
+      type: "group",
+      otherParticipant: null,
+      group: { id: "group-1", name: "Book Club", description: null, avatarUrl: null, memberCount: 4, myRole: "member" },
+      lastMessage: { id: "msg-7", body: null, contentType: "image", senderId: "user-3", senderDisplayName: "Alan", createdAt: new Date().toISOString() },
+      unreadCount: 0,
+      updatedAt: new Date().toISOString(),
+    };
+    vi.mocked(conversationService.list).mockResolvedValue([group, sampleConversation]);
+
+    renderChatList();
+
+    await waitFor(() => expect(screen.getByText("Book Club")).toBeInTheDocument());
+    expect(screen.getByLabelText("Group")).toBeInTheDocument();
+    expect(screen.getByText("Alan: Photo")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "New group" })).toBeInTheDocument();
+  });
 });

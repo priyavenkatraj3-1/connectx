@@ -1,7 +1,7 @@
 import type { Response } from "express";
 import type { AuthenticatedRequest } from "../../middleware/requireAuth";
 import type { MessagesService } from "./messages.service";
-import type { MarkReadInput, SendMessageInput } from "./messages.validation";
+import type { EditMessageInput, MarkReadInput, SendMessageInput } from "./messages.validation";
 
 export class MessagesController {
   constructor(private readonly messagesService: MessagesService) {}
@@ -17,14 +17,38 @@ export class MessagesController {
 
   send = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     const conversationId = req.params.conversationId as string;
-    const { body } = req.body as SendMessageInput;
+    const { body, replyToMessageId, mentionedUserIds, attachmentId } = req.body as SendMessageInput;
 
     const message = await this.messagesService.sendMessage({
       conversationId,
       senderId: req.user!.userId,
       body,
+      replyToMessageId,
+      mentionedUserIds,
+      attachmentId,
     });
     res.status(201).json({ message });
+  };
+
+  edit = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    const { body, mentionedUserIds } = req.body as EditMessageInput;
+    const message = await this.messagesService.editMessage({
+      conversationId: req.params.conversationId as string,
+      messageId: req.params.messageId as string,
+      userId: req.user!.userId,
+      body,
+      mentionedUserIds,
+    });
+    res.status(200).json({ message });
+  };
+
+  remove = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    await this.messagesService.deleteMessage({
+      conversationId: req.params.conversationId as string,
+      messageId: req.params.messageId as string,
+      userId: req.user!.userId,
+    });
+    res.status(204).send();
   };
 
   markRead = async (req: AuthenticatedRequest, res: Response): Promise<void> => {

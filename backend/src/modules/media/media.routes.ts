@@ -1,9 +1,45 @@
-import { Router } from "express";
+import express, { Router, type NextFunction, type Request, type Response } from "express";
+import { AppError } from "../../middleware/errorHandler";
 import { requireAuth } from "../../middleware/requireAuth";
-import { notImplemented } from "../../utils/notImplemented";
+import { validateParams, validateQuery } from "../../middleware/validate";
+import { asyncHandler } from "../../utils/asyncHandler";
+import { MediaController } from "./media.controller";
+import type { MediaService } from "./media.service";
+import { attachmentParamsSchema, uploadQuerySchema } from "./media.validation";
 
-export const mediaRouter = Router();
+/**
+ * Uploads are sent as the raw request body (no multipart parsing, so no
+ * extra dependency): POST /media?conversationId=…&filename=…[&mimeType=…]
+ * with Content-Type: application/octet-stream.
+ */
+export function createMediaRouter(mediaService: MediaService, maxUploadBytes: number): Router {
+  const controller = new MediaController(mediaService);
+  const router = Router();
+  const attachmentParams = validateParams(attachmentParamsSchema);
 
-mediaRouter.post("/", requireAuth, notImplemented("Upload attachment"));
-mediaRouter.get("/:attachmentId", requireAuth, notImplemented("Get attachment"));
-mediaRouter.delete("/:attachmentId", requireAuth, notImplemented("Delete attachment"));
+  // Accept any content type for the raw body; the file's real type is determined by validation, not by this header.
+  const rawBody = express.raw({ type: () => true, limit: maxUploadBytes });
+
+  // body-parser reports oversized bodies as a generic error; turn it into a clean 413.
+  const handleBodyErrors = (err: unknown, _req: Request, _res: Response, next: NextFunction): void => {
+    if (err && typeof err === "object" && "type" in err && (err as { type: string }).type === "entity.too.large") {
+      next(new AppError(`File exceeds the maximum size of ${Math.floor(maxUploadBytes / (1024 * 1024))}MB`, 413));
+      return;
+    }
+    next(err);
+  };
+
+  router.post(
+    "/",
+    requireAuth,
+    validateQuery(uploadQuerySchema),
+    rawBody,
+    handleBodyErrors,
+    asyncHandler(controller.upload)
+  );
+  router.get("/:attachmentId", requireAuth, attachmentParams, asyncHandler(controller.getMetadata));
+  router.get("/:attachmentId/content", requireAuth, attachmentParams, asyncHandler(controller.getContent));
+  router.delete("/:attachmentId", requireAuth, attachmentParams, asyncHandler(controller.remove));
+
+  return router;
+}

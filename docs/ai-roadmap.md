@@ -73,7 +73,7 @@ conversation/message rather than silently rewriting content.
 
 ## What later phases need to add
 
-- A real `AIProvider` implementation (Phase 3+), registered in
+- A real `AIProvider` implementation (AI phase — see development-phases.md), registered in
   `providers/provider.factory.ts` alongside `NoneAIProvider`.
 - Persistence for `ai_conversations`, `ai_memories`, `ai_actions` once a
   database is connected.

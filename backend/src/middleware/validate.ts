@@ -24,6 +24,26 @@ export function validateBody(schema: ZodSchema) {
 }
 
 /**
+ * Validates `req.params` (e.g. that IDs are UUIDs) so malformed IDs get a
+ * clean 400 instead of reaching the database. Must be registered on the
+ * route itself — Express only populates params per matched route.
+ */
+export function validateParams(schema: ZodSchema) {
+  return (req: Request, _res: Response, next: NextFunction): void => {
+    const result = schema.safeParse(req.params);
+
+    if (!result.success) {
+      const message = result.error.issues
+        .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
+        .join("; ");
+      throw new AppError(`Validation failed: ${message}`, 400);
+    }
+
+    next();
+  };
+}
+
+/**
  * Validates `req.query` against a Zod schema. Express types `req.query` as
  * read-only-ish `ParsedQs`; we validate it but deliberately don't reassign
  * it (unlike validateBody) since Express 4 getters make that unreliable —

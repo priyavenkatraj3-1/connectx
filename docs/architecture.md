@@ -26,10 +26,10 @@ Each domain lives in its own folder under `backend/src/modules/`:
 modules/
 ├── auth/            signup, login, tokens, password hashing
 ├── users/            user profiles, search
-├── conversations/    direct conversation management (group: later phase)
-├── messages/         sending, listing, read receipts
-├── groups/            group/community membership — scaffolded, later phase
-├── media/             file/attachment upload & retrieval — scaffolded, later phase
+├── conversations/    conversation list (direct + group), direct conversation creation
+├── messages/         send, list, edit, delete, replies, @mentions, read receipts
+├── groups/           group creation, metadata, membership, roles (Phase 3)
+├── media/            upload validation, metadata, storage abstraction, authorized download (Phase 3)
 ├── notifications/    in-app/push notification delivery — scaffolded, later phase
 ├── ai/                 provider-agnostic AI feature interfaces — scaffolded, later phase
 └── privacy/           user-controlled privacy & AI-consent settings — scaffolded, later phase
@@ -52,8 +52,8 @@ Testing below) — see `backend/src/container.ts`.
 ## Why some modules are still interface-only
 
 `auth`, `users`, `conversations`, and `messages` are fully implemented as
-of Phase 2. `groups`, `media`, `notifications`, `privacy`, and `ai` remain
-a service contract plus a router that honestly responds
+of Phase 2; `groups` and `media` as of Phase 3. `notifications`, `privacy`,
+and `ai` remain a service contract plus a router that honestly responds
 `501 Not Implemented` — see `backend/src/utils/notImplemented.ts`. This
 keeps the shape of the system visible and reviewable without faking
 functionality that doesn't exist yet (no fabricated group data, no AI
@@ -68,8 +68,44 @@ single `DatabaseClient` and a `RealtimeGateway`:
 DatabaseClient ─┬─> PostgresUserRepository ─> AuthService
                 ├─> UsersRepository ─────────> UsersService
                 ├─> ConversationsRepository ─> ConversationsService
-                └─> MessagesRepository ──────> MessagesService ─(pushes events via)─> RealtimeGateway
+                ├─> MediaRepository ─┬───────> MediaService ──────┐
+                │                    └─┐                          ├── StorageProvider (local disk / in-memory in tests)
+                ├─> MessagesRepository ┴─────> MessagesService ───┤
+                └─> GroupsRepository ────────> GroupsService      │
+                                                  │               │
+          MessagesService, GroupsService ─(push events via)─> RealtimeGateway
 ```
+
+Tests can also override `storage` (an in-memory `StorageProvider`) and
+`maxUploadBytes`.
+
+## Groups: one conversation model, two tables
+
+A group *is* a conversation (`conversations.type = 'group'`) plus a
+`groups` metadata row. Access control is shared with direct chats:
+`conversation_members` (active when `left_at IS NULL`) decides who can
+read/send, so the existing `requireConversationMember` guard and the
+messages module work for groups without a second messaging stack.
+`group_members` adds the role; `GroupsRepository` writes both tables in one
+transaction. Role rules live in `GroupsService` (permission table in
+[api.md](./api.md#groups--modulesgroups-phase-3)). See
+[database.md](./database.md#groups) for the integrity constraints.
+
+## Media: metadata in Postgres, bytes behind `StorageProvider`
+
+`modules/media/storage/storage-provider.interface.ts` defines
+`save/read/delete(storageKey)`. Phase 3 ships `LocalDiskStorageProvider`
+(writes under `UPLOAD_DIR`, default `backend/uploads/`, gitignored); an
+S3/object-storage implementation can replace it in `container.ts` without
+touching the service, repository or routes. Storage keys are
+`<conversationId>/<attachmentId>` — never derived from user input.
+
+Uploads are sent as a raw request body (`express.raw`, scoped to the one
+route) rather than multipart, so no upload library was added. Validation
+(`file-validation.ts`) checks size, extension allow-list, and magic bytes
+before anything is written. The browser can't attach an `Authorization`
+header to `<img src>`, so the frontend fetches media with the token and
+renders it through a temporary object URL (`useAttachmentUrl`).
 
 `createApp(overrides?)` (in `app.ts`) calls `createContainer(overrides)`
 and mounts routers built from its services, returning both the Express
@@ -97,8 +133,10 @@ the browser's `open` event.
 
 `ConnectionRegistry` tracks which open sockets belong to which
 authenticated user (a user may have several: multiple tabs, multiple
-devices). `MessagesService` pushes `message:new` / `message:delivered` /
-`message:read` events through the `RealtimeGateway` interface — it never
+devices). `MessagesService` and `GroupsService` push events (messages,
+receipts, edits/deletes, membership and role changes — fanned out with
+`realtime/broadcast.ts` to the conversation's active members only) through
+the `RealtimeGateway` interface — neither
 touches the `ws` package directly, so the transport could be swapped
 without touching business logic. See [api.md](./api.md#realtime--websocket-gateway)
 for the full event catalog.
@@ -135,7 +173,12 @@ real SQL (joins, `ON CONFLICT` upserts, transactions) against the real
 schema, without requiring a network PostgreSQL server. Production code
 never imports `pg-mem`; it is a devDependency used only by tests.
 
-Realtime tests (`backend/tests/realtime/ws.test.ts`) go a layer further:
+The same suite can be pointed at a real PostgreSQL server with
+`TEST_DATABASE_URL` (see [database.md](./database.md#testing-against-this-schema)) —
+this is how Phase 3 caught a timestamp-precision bug pg-mem can't
+reproduce.
+
+Realtime tests (`backend/tests/realtime/ws.test.ts`, `groups-ws.test.ts`) go a layer further:
 they start a real `http.Server`, attach the real `ws.server.ts` gateway to
 it, and connect real `ws` clients over a real (loopback) socket — nothing
 about the WebSocket transport itself is mocked.
@@ -148,14 +191,19 @@ frontend/src/
 │   ├── ui/        generic building blocks (Button, Input, Avatar, icons)
 │   ├── layout/    shell-level layout (Sidebar, AppShellLayout, AuthLayout, ChatsLayout)
 │   ├── chat/      chat-specific pieces (ChatListPanel, ConversationArea,
-│   │              NewConversationModal, MessageStatusTicks)
+│   │              NewConversationModal, MessageStatusTicks, MessageBubble,
+│   │              MessageComposer — replies, edits, @mentions, attachments)
+│   ├── groups/    NewGroupModal, GroupDetailsPanel, MemberPicker
+│   ├── media/     AttachmentView (image/video/audio inline, documents as file cards)
 │   └── common/    cross-cutting states (LoadingState, ErrorState, EmptyState)
 ├── pages/         route-level views (Landing, Login, Signup, app/*)
 ├── context/        React context providers (AuthContext, RealtimeContext,
 │                    ConversationsContext)
 ├── routes/         routing helpers (ProtectedRoute)
 ├── services/        API client + per-domain service wrappers (auth, users,
-│                    conversations, messages)
+│                    conversations, messages, groups, media)
+├── hooks/           useDebouncedValue, useAttachmentUrl
+├── utils/           formatting, conversation display + group permission mirror
 ├── types/           shared TypeScript types (mirrors backend DTOs)
 └── styles/          Tailwind entry point
 ```
@@ -171,7 +219,10 @@ drop, and exposes `subscribe(listener)` for any component to receive
 server events. **`ConversationsContext`** is the one place that owns the
 conversation list — it fetches it once, then updates it incrementally from
 realtime events (new message → move to top of list + bump unread count;
-mark-read → zero the badge) rather than refetching on every event.
+mark-read → zero the badge; `conversation:unread` → sync the badge from
+another device; `conversation:removed` → drop it). Events whose effect the
+client can't compute locally (a member joined, a message was deleted and
+the preview must change) trigger a quiet background refetch.
 
 ## Multi-device & scalability notes (forward-looking)
 
@@ -188,4 +239,8 @@ mark-read → zero the badge) rather than refetching on every event.
   load balancer would require a shared pub/sub layer (e.g. Redis) so an
   event for a user connected to instance B can be delivered even when the
   message was sent via instance A — not needed at this scale, but worth
-  flagging before Phase 5 (Scale).
+  flagging before the Scale phase (see development-phases.md).
+- Media bytes are stored on the local disk of whichever instance received
+  the upload (`LocalDiskStorageProvider`). Multiple instances need a shared
+  `StorageProvider` (object storage such as S3) — the interface is already
+  in place for that swap.

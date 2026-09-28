@@ -21,7 +21,7 @@ at once."
 - Database schema designed and documented, not yet connected
 - Unit + API tests for auth; component tests for frontend routing/UI
 
-## Phase 2 — Authentication & Real-time Direct Messaging ✅ (this phase)
+## Phase 2 — Authentication & Real-time Direct Messaging ✅
 
 - Connected a real PostgreSQL database (`pg`); replaced `InMemoryUserRepository`
   with `PostgresUserRepository` — authentication is now persistent
@@ -48,16 +48,58 @@ at once."
 - **Not yet implemented:** group conversations, message edit/delete/reactions,
   refresh-token rotation/revocation, file attachments
 
-## Phase 3 — Groups, Voice/Video & Notifications (planned)
+## Phase 3 — Groups & Media Foundation ✅ (this phase)
 
-- Group conversations (multi-member), building on the existing `groups` /
-  `group_members` schema
-- Calling infrastructure (signaling + media transport)
-- Push notification delivery (web push, mobile push)
+Scope was narrowed from the original "Groups, Voice/Video & Notifications"
+plan: calls, status and notifications moved to Phase 4 so this phase could
+ship group chat and the media foundation properly.
+
+- **Groups:** create (name, description, avatar URL foundation, initial
+  members), view details/members, edit details, add/remove members, leave,
+  owner/admin/member roles with promote/demote, safe owner hand-over on
+  leave. All authorization server-side (`GroupsService`), backed by DB
+  constraints (no duplicate membership, at most one owner)
+- **Group messaging on the existing stack** — a group is a conversation, so
+  send/list/receipts/unread/list-ordering reuse the Phase 2 code paths;
+  aggregate delivered/read status across all recipients; history visible
+  only from when you joined
+- **Messages (all conversations):** replies, @mentions (validated as
+  members), author-only edit and delete (soft delete; attachment bytes
+  removed)
+- **Media foundation:** `StorageProvider` abstraction with local-disk
+  storage, raw-body upload with size + extension allow-list + magic-byte
+  validation (client MIME type not trusted), sanitized filenames,
+  membership-gated download, uploader-only delete of unsent uploads, media
+  messages (image/video/audio/document/file) with captions
+- **Realtime:** `message:updated`, `message:deleted`, `message:status`,
+  `conversation:added/removed/unread`, `group:updated`,
+  `group:member_added/removed/left`, `group:role_changed`; the WebSocket
+  `message:read` event is now membership-checked
+- **Frontend:** new-group modal with member search, group chat view with
+  sender names and member count, group info panel with role-aware
+  controls, reply/edit/delete actions, @mention suggestions, attachment
+  picker with preview, upload progress and error states, inline
+  image/video/audio and document file cards
+- Migration `002_groups_media.sql` (additive only)
+- Fixed a Phase 2 bug found by running the suite on real PostgreSQL: the
+  last-read message kept counting as unread (microsecond vs millisecond
+  timestamp precision)
+- **Known limitations** (see README): no malware scanning, no thumbnails
+  or transcoding, no voice *recording* (audio files can be attached), no
+  cleanup job for abandoned uploads, no ownership transfer except by
+  leaving, no admin moderation of others' messages, avatar is a URL only,
+  delivery receipts are only recorded for recipients online at send time
+
+## Phase 4 — Calls, Status & Notifications (planned)
+
+- Calling infrastructure (signaling + media transport), screen sharing
 - Status/stories with expiry cleanup job
-- File attachments (media module wired to real object storage)
+- Push notification delivery (web push, mobile push), mention notifications
+- Communities/channels
+- Media follow-ups: object storage provider, thumbnails, voice recording,
+  malware scanning, abandoned-upload cleanup
 
-## Phase 4 — AI Features (planned)
+## Phase 5 — AI Features (planned)
 
 - Wire up a real `AIProvider` implementation
 - Implement Ask Your Chats, chat search, and AI Chat Memory (with consent
@@ -65,12 +107,12 @@ at once."
 - Voice Intelligence, Group Decision AI, Scam/Spam Shield, Smart Action
   Extraction, Live Translation
 
-## Phase 5 — Multi-device, Scale & Productivity (planned)
+## Phase 6 — Multi-device, Scale & Productivity (planned)
 
 - Refresh-token rotation and server-side session revocation
 - Mobile/desktop client shells against the same API
-- Horizontal scaling of the backend (stateless by design since Phase 1)
-- Productivity/collaboration features beyond messaging
+- Horizontal scaling of the backend (shared realtime pub/sub, shared media storage)
+- Productivity/collaboration features beyond messaging (reminders, tasks)
 
 ## Ground rules for every phase
 

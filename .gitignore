@@ -36,3 +36,6 @@ Thumbs.db
 # Misc
 *.pem
 .cache/
+
+# Local media uploads (development storage)
+backend/uploads/
