@@ -44,6 +44,10 @@ export type ServerEvent =
       viewedAt: string;
       viewCount: number;
     }
+  // --- AI (Phase 5) --- status only; never carries content.
+  | { type: "ai:processing"; requestId: string; feature: string }
+  | { type: "ai:completed"; requestId: string; feature: string }
+  | { type: "ai:failed"; requestId: string; feature: string; code: string }
   | { type: "error"; message: string };
 
 /** Server events that belong to a conversation's timeline (have a top-level conversationId). */

@@ -2,17 +2,21 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { CallButtons } from "../../components/calls/CallButtons";
 import { CallHistoryItem } from "../../components/calls/CallHistoryItem";
+import { ConversationAIPanel } from "../../components/ai/ConversationAIPanel";
+import { MessageAITools } from "../../components/ai/MessageAITools";
 import { MessageBubble } from "../../components/chat/MessageBubble";
 import { MessageComposer, type MentionCandidate } from "../../components/chat/MessageComposer";
 import { ErrorState } from "../../components/common/ErrorState";
 import { LoadingState } from "../../components/common/LoadingState";
 import { GroupDetailsPanel } from "../../components/groups/GroupDetailsPanel";
 import { Avatar } from "../../components/ui/Avatar";
-import { BackIcon, InfoIcon, PhoneIcon, VideoIcon } from "../../components/ui/icons";
+import { BackIcon, InfoIcon, PhoneIcon, SparkleIcon, VideoIcon } from "../../components/ui/icons";
+import { useOptionalAI } from "../../context/AIContext";
 import { useAuth } from "../../context/AuthContext";
 import { useOptionalCalls } from "../../context/CallContext";
 import { useConversations } from "../../context/ConversationsContext";
 import { useRealtime } from "../../context/RealtimeContext";
+import { useSafetyScan } from "../../hooks/useSafetyScan";
 import { callService } from "../../services/callService";
 import { groupService } from "../../services/groupService";
 import { messageService } from "../../services/messageService";
@@ -39,8 +43,11 @@ export function ChatConversationPage() {
   const [hasMoreHistory, setHasMoreHistory] = useState(false);
   const [callHistory, setCallHistory] = useState<CallHistoryEntryDTO[]>([]);
   const [activeGroupCall, setActiveGroupCall] = useState<CallDTO | null>(null);
+  const [isAIPanelOpen, setIsAIPanelOpen] = useState(false);
   const scrollAnchorRef = useRef<HTMLDivElement>(null);
   const calls = useOptionalCalls();
+  const ai = useOptionalAI();
+  const { findings: safetyFindings, markHandled: markFindingHandled } = useSafetyScan(conversationId, messages, user?.id);
 
   const conversation = conversationId ? getConversation(conversationId) : undefined;
   const isGroup = conversation?.type === "group";
@@ -52,6 +59,7 @@ export function ChatConversationPage() {
     setEditing(null);
     setRemovedReason(null);
     setIsGroupPanelOpen(false);
+    setIsAIPanelOpen(false);
     setGroupDetails(null);
     setCallHistory([]);
     setActiveGroupCall(null);
@@ -237,7 +245,7 @@ export function ChatConversationPage() {
 
   return (
     <div className="flex flex-1 overflow-hidden">
-      <div className={`flex flex-1 flex-col ${isGroupPanelOpen ? "hidden md:flex" : "flex"}`}>
+      <div className={`flex flex-1 flex-col ${isGroupPanelOpen || isAIPanelOpen ? "hidden md:flex" : "flex"}`}>
         <header className="flex items-center gap-3 border-b border-slate-200 px-5 py-3 dark:border-slate-800">
           <Link
             to="/app"
@@ -261,10 +269,27 @@ export function ChatConversationPage() {
           {calls && conversationId && !removedReason && (conversation?.type === "direct" || conversation?.type === "group") && (
             <CallButtons conversationId={conversationId} disabled={!!activeGroupCall} />
           )}
+          {ai && conversationId && !removedReason && (
+            <button
+              type="button"
+              onClick={() => {
+                setIsGroupPanelOpen(false);
+                setIsAIPanelOpen((open) => !open);
+              }}
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+              aria-label="AI assistant"
+              aria-expanded={isAIPanelOpen}
+            >
+              <SparkleIcon />
+            </button>
+          )}
           {isGroup && groupDetails && !removedReason && (
             <button
               type="button"
-              onClick={() => setIsGroupPanelOpen((open) => !open)}
+              onClick={() => {
+                setIsAIPanelOpen(false);
+                setIsGroupPanelOpen((open) => !open);
+              }}
               className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
               aria-label="Group info"
               aria-expanded={isGroupPanelOpen}
@@ -323,6 +348,16 @@ export function ChatConversationPage() {
                   setEditing(m);
                 }}
                 onDelete={handleDelete}
+                aiSlot={
+                  ai ? (
+                    <MessageAITools
+                      message={item.message}
+                      isOwn={item.message.senderId === user?.id}
+                      finding={safetyFindings.get(item.message.id)}
+                      onFindingHandled={markFindingHandled}
+                    />
+                  ) : undefined
+                }
               />
               )
             )}
@@ -358,6 +393,10 @@ export function ChatConversationPage() {
           onLeft={handleLeft}
           onClose={() => setIsGroupPanelOpen(false)}
         />
+      )}
+
+      {isAIPanelOpen && ai && conversationId && !removedReason && (
+        <ConversationAIPanel conversationId={conversationId} isGroup={isGroup} onClose={() => setIsAIPanelOpen(false)} />
       )}
     </div>
   );

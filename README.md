@@ -5,7 +5,7 @@ status/stories, voice/video, and privacy-conscious, opt-in AI features —
 built with its own visual identity and architecture (not a clone of any
 existing product).
 
-**This repository is at Phase 4: Calls & Status.** See [docs/development-phases.md](docs/development-phases.md)
+**This repository is at Phase 5: AI Features & Privacy Layer.** See [docs/development-phases.md](docs/development-phases.md)
 for the full roadmap and what's planned next.
 
 ## Project vision
@@ -163,7 +163,9 @@ ones:
 | `WEBRTC_TURN_SECRET` (+ `WEBRTC_TURN_TTL_SECONDS`) | Recommended TURN auth: short-lived per-user credentials (coturn `use-auth-secret`) |
 | `WEBRTC_TURN_USERNAME` / `WEBRTC_TURN_CREDENTIAL` | Alternative static TURN credentials |
 | `CALL_RING_TIMEOUT_SECONDS` | How long a call rings before it's missed (default `45`) |
-| `AI_PROVIDER` | AI provider selector; `none` until the AI phase |
+| `AI_PROVIDER` / `AI_PROVIDER_API_KEY` / `AI_MODEL` | AI provider: `none` (default — AI features report "not configured") or `anthropic`. See [docs/ai.md](docs/ai.md#configuration) |
+| `AI_RATE_LIMIT_PER_MINUTE` / `AI_RATE_LIMIT_PER_DAY` | Per-user AI request limits (default `10` / `200`) |
+| `TRANSCRIPTION_PROVIDER` / `TRANSCRIPTION_BASE_URL` | Speech-to-text for Voice Intelligence: `none` (default) or `whisper-http` |
 
 The frontend reads `VITE_API_BASE_URL` (defaults to
 `http://localhost:4000/api/v1`) and `VITE_WS_URL` (defaults to the same
@@ -192,6 +194,31 @@ npm run build
 ```
 
 ## Currently implemented features
+
+### Phase 5 — AI features & privacy layer
+
+All opt-in (off by default), server-enforced, and labeled as AI-generated.
+Details: [docs/ai.md](docs/ai.md).
+
+- **Settings → AI Features:** master switch plus per-feature consent,
+  translation language, per-chat exclusion, provider status and a
+  plain-language "what is shared" disclosure
+- **Ask Your Chats** (sidebar ✨ or the chat's ✨ panel): questions over
+  chats you pick, answered only from messages you can see, with the source
+  messages shown; "not enough information" instead of guessing
+- **AI Memory:** explicit notes (typed, or "Remember" on a message) that you
+  can view, delete or clear at any time — never extracted automatically
+- **Smart Actions:** suggested tasks/reminders/deadlines from a chat; you
+  confirm, edit or dismiss each one (nothing is scheduled yet)
+- **Group Decision AI:** summary / decisions / open issues for a group, each
+  item linked to supporting messages; no invented consensus
+- **Translation:** per message, on request; the original is never changed
+- **Scam/Spam Shield:** automatic local warnings with reasons (no AI
+  provider needed), optional AI check, dismiss/report
+- **Voice Intelligence foundation:** transcribe and summarize audio
+  attachments (needs a transcription provider)
+- Provider abstraction with an Anthropic (Claude) implementation; with no
+  provider configured, features say so instead of faking output
 
 ### Phase 4 — Calls & status
 
@@ -266,9 +293,23 @@ Details: [docs/calls.md](docs/calls.md), [docs/status.md](docs/status.md).
 See [docs/api.md](docs/api.md) for every endpoint and event, and
 [docs/security.md](docs/security.md) for what's covered.
 
-## Known limitations (Phase 4)
+## Known limitations (Phase 5)
 
-Calls and status:
+AI (see [docs/ai.md](docs/ai.md#known-limitations)):
+
+- **Real model output is not covered by automated tests** — the suite uses
+  a scripted test provider to verify authorization, validation and
+  privacy logic. Check real behavior with
+  [docs/manual-testing-phase5.md](docs/manual-testing-phase5.md).
+- Retrieval is keyword + recency, not semantic search. Requests are
+  synchronous (no job queue). The per-minute AI limit is per process.
+- Scam heuristics are pattern-based (English-centric) and can be wrong both
+  ways; reports aren't reviewed yet. Confirmed actions don't create
+  reminders yet. No in-app voice recording.
+- With a provider configured, selected chat content is sent to that
+  provider (disclosed in Settings).
+
+Calls and status (Phase 4):
 
 - **Real audio/video is not covered by automated tests** — Node/jsdom have
   no WebRTC; the call UI and signaling are tested against fake
@@ -322,8 +363,8 @@ Carried over from Phase 3:
 
 ## What's only scaffolded
 
-Notifications, general privacy settings persistence (`/privacy`), and all
-AI features remain typed interfaces and route shapes only — routes
+Notifications and general privacy settings persistence (`/privacy`)
+remain typed interfaces and route shapes only — routes
 honestly respond `501`, not fake data. (Status privacy *is* implemented,
 under `/statuses/privacy`.) Communities aren't started. See
 [docs/development-phases.md](docs/development-phases.md) for when each
@@ -334,7 +375,7 @@ lands.
 See [docs/ai-roadmap.md](docs/ai-roadmap.md) for the design commitments
 behind each AI feature (Ask Your Chats, AI Chat Memory, Voice Intelligence,
 Group Decision AI, Scam/Spam Shield, Smart Action Extraction, Live
-Translation) and their current (interface-only) status.
+Translation). Phase 5 implements them — see [docs/ai.md](docs/ai.md).
 
 ## Security notes
 
@@ -348,6 +389,7 @@ place today.
 - Phase 2 (two users, direct chat): [docs/manual-testing-phase2.md](docs/manual-testing-phase2.md)
 - Phase 3 (three users, groups, roles, media): [docs/manual-testing-phase3.md](docs/manual-testing-phase3.md)
 - Phase 4 (two browser sessions, voice/video calls, status, privacy, expiry): [docs/manual-testing-phase4.md](docs/manual-testing-phase4.md)
+- Phase 5 (AI consent, each AI feature, unconfigured provider, limits): [docs/manual-testing-phase5.md](docs/manual-testing-phase5.md)
 
 ## Planned phases
 
@@ -356,10 +398,12 @@ place today.
    profiles, search, 1:1 conversations, real-time messages, receipts
 3. **Groups & Media Foundation** ✅ — group chat, roles,
    replies/mentions/edit/delete, validated media uploads
-4. **Calls & Status** ✅ (this phase) — WebRTC voice/video calls, group
+4. **Calls & Status** ✅ — WebRTC voice/video calls, group
    call foundation, call history, status/stories with server-enforced
    privacy and expiry
-5. **AI Features** — a real AI provider wired into every interface
+5. **AI Features & Privacy Layer** ✅ (this phase) — provider abstraction,
+   consent, Ask Your Chats, memory, actions, group decisions, translation,
+   scam shield, voice intelligence foundation
 6. **Multi-device, Scale & Productivity** — session management,
    mobile/desktop clients, scaling, productivity tools
 

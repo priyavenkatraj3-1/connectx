@@ -1,19 +1,32 @@
-import type { AIProvider, TextGenerationRequest, TextGenerationResult, TranscriptionRequest, TranscriptionResult } from "../interfaces/ai-provider.interface";
+import {
+  type AIGenerateResult,
+  type AIProvider,
+  ProviderCallError,
+  type TranscriptionProvider,
+  type TranscriptionResult,
+} from "../interfaces/ai-provider.interface";
 
 /**
- * Default provider when `AI_PROVIDER=none` (Phase 1 default). Clearly
- * reports itself as unconfigured rather than silently returning fake
- * output, so callers and UI can show an honest "AI not available" state.
+ * Default when `AI_PROVIDER=none`. Reports itself as unconfigured and
+ * throws instead of returning fabricated output, so the API and UI can show
+ * an honest "AI not configured" state. The gateway checks `isConfigured`
+ * first, so these methods are a last line of defense.
  */
 export class NoneAIProvider implements AIProvider {
   readonly name = "none";
   readonly isConfigured = false;
+  readonly model = null;
 
-  async generateText(_request: TextGenerationRequest): Promise<TextGenerationResult> {
-    throw new Error("No AI provider is configured. Set AI_PROVIDER and AI_PROVIDER_API_KEY to enable AI features.");
+  async generate(): Promise<AIGenerateResult> {
+    throw new ProviderCallError("No AI provider is configured", "not_configured", false);
   }
+}
 
-  async transcribeAudio(_request: TranscriptionRequest): Promise<TranscriptionResult> {
-    throw new Error("No AI provider is configured. Set AI_PROVIDER and AI_PROVIDER_API_KEY to enable AI features.");
+export class NoneTranscriptionProvider implements TranscriptionProvider {
+  readonly name = "none";
+  readonly isConfigured = false;
+
+  async transcribe(): Promise<TranscriptionResult> {
+    throw new ProviderCallError("No transcription provider is configured", "not_configured", false);
   }
 }

@@ -7,6 +7,7 @@ import { LoginPage } from "./pages/LoginPage";
 import { SignupPage } from "./pages/SignupPage";
 import { ChatConversationPage } from "./pages/app/ChatConversationPage";
 import { ChatsLayout } from "./pages/app/ChatsLayout";
+import { AskYourChatsView } from "./pages/app/AskYourChatsView";
 import { ChatsView } from "./pages/app/ChatsView";
 import { ProfileView } from "./pages/app/ProfileView";
 import { SettingsView } from "./pages/app/SettingsView";
@@ -35,6 +36,7 @@ export function App() {
               <Route path="chat/:conversationId" element={<ChatConversationPage />} />
             </Route>
             <Route path="status" element={<StatusView />} />
+            <Route path="ai" element={<AskYourChatsView />} />
             <Route path="settings" element={<SettingsView />} />
             <Route path="profile" element={<ProfileView />} />
           </Route>

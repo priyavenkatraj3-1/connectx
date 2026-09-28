@@ -15,7 +15,9 @@ export function buildQueryString(params: Record<string, string | number | undefi
 export class ApiError extends Error {
   constructor(
     message: string,
-    public readonly status: number
+    public readonly status: number,
+    /** Machine-readable error code from the server, when it sends one (e.g. "ai_not_configured"). */
+    public readonly code?: string
   ) {
     super(message);
   }
@@ -50,7 +52,8 @@ export async function apiRequest<TResponse>(path: string, options: RequestOption
 
   if (!response.ok) {
     const message = data?.error?.message ?? "Something went wrong. Please try again.";
-    throw new ApiError(message, response.status);
+    const code = typeof data?.error?.code === "string" ? (data.error.code as string) : undefined;
+    throw new ApiError(message, response.status, code);
   }
 
   return data as TResponse;

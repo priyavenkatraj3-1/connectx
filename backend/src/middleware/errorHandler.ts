@@ -3,12 +3,16 @@ import type { NextFunction, Request, Response } from "express";
 export class AppError extends Error {
   public readonly statusCode: number;
   public readonly isOperational: boolean;
+  /** Optional machine-readable code returned alongside the message (e.g. "ai_not_configured"). */
+  public readonly code: string | undefined;
 
-  constructor(message: string, statusCode = 500, isOperational = true) {
+  constructor(message: string, statusCode = 500, isOperational = true, code?: string) {
     super(message);
     this.statusCode = statusCode;
     this.isOperational = isOperational;
-    Object.setPrototypeOf(this, AppError.prototype);
+    this.code = code;
+    // new.target keeps subclasses (e.g. the AI errors) instanceof-correct.
+    Object.setPrototypeOf(this, new.target.prototype);
   }
 }
 
@@ -45,6 +49,7 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
   res.status(statusCode).json({
     error: {
       message: statusCode === 500 ? "Internal server error" : message,
+      ...(isAppError && err.code && statusCode !== 500 ? { code: err.code } : {}),
     },
   });
 }

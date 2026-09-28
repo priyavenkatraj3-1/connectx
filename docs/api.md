@@ -562,6 +562,29 @@ conversation, plus the affected user for removals/leaves.
 | `call:failed` | `{ callId, reason: "connection_failed" \| "media_error" }` | **Phase 4**: ends a direct call as `failed`; a group participant leaves |
 | `call:media_state` | `{ callId, audioEnabled, videoEnabled }` | **Phase 4**: mic/camera indicator for other participants |
 
+## AI (Phase 5)
+
+All under `/api/v1/ai`, all authenticated. Full request/response shapes,
+consent rules and error codes (`ai_disabled`, `ai_not_configured`,
+`ai_rate_limited`, …) are in [ai.md](./ai.md#features).
+
+| Method & path | Purpose |
+|---|---|
+| `GET` / `PATCH /ai/settings` | Consent switches + preferred language; `GET` also returns provider status, supported languages, data-sharing disclosure |
+| `GET /ai/exclusions` · `PUT` / `DELETE /ai/exclusions/:conversationId` | Chats excluded from the user's AI features |
+| `POST /ai/ask` | Ask Your Chats (`{ question, conversationIds[1..10], useMemory? }`) → answer + real source messages |
+| `GET` / `POST` / `DELETE /ai/memories` · `DELETE /ai/memories/:memoryId` | Explicit AI memory |
+| `POST /ai/conversations/:conversationId/actions/extract` · `GET /ai/actions` · `PATCH /ai/actions/:actionId` · `POST /ai/actions/:actionId/confirm` · `POST /ai/actions/:actionId/dismiss` | Smart Action suggestions (nothing is scheduled) |
+| `POST /ai/conversations/:conversationId/decision-summary` | Group Decision AI (`mode`: `summary` \| `decisions` \| `open_issues`) |
+| `POST /ai/messages/:messageId/translate` | On-request translation (`{ targetLanguage }`) |
+| `POST /ai/conversations/:conversationId/safety-scan` | Local scam heuristics over given message ids (no provider) |
+| `POST /ai/messages/:messageId/scam-check` · `POST /ai/messages/:messageId/safety-feedback` | AI scam check; dismiss/report a warning |
+| `GET /ai/voice/:attachmentId` · `POST …/transcribe` · `POST …/analyze` | Voice Intelligence |
+
+Server → client events `ai:processing` / `ai:completed` / `ai:failed`
+(`{ requestId, feature, code? }`) are sent only to the requesting user and
+never contain content.
+
 ## Everything else — scaffolded, not implemented
 
 These routers exist with the correct URL shape and `requireAuth`
@@ -572,7 +595,6 @@ intentional — see [development-phases.md](./development-phases.md).
 |---|---|
 | `notifications` | `GET /notifications`, `POST /notifications/:notificationId/read` |
 | `privacy` | `GET /privacy`, `PATCH /privacy` |
-| `ai` | `POST /ai/ask`, `GET /ai/memories`, `DELETE /ai/memories/:memoryId`, `POST /ai/voice/:attachmentId/analyze`, `POST /ai/conversations/:conversationId/summarize`, `POST /ai/spam-shield/analyze`, `POST /ai/conversations/:conversationId/actions`, `POST /ai/translate` |
 
 Each maps to a documented service interface under the corresponding
-module (e.g. `modules/ai/interfaces/*.interface.ts`).
+module.

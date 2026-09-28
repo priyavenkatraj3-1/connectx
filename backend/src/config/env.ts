@@ -16,9 +16,31 @@ interface EnvConfig {
     windowMs: number;
     maxRequests: number;
   };
+  /** AI provider + limits — see docs/ai.md. Keys never leave the backend. */
   ai: {
+    /** "none" (default) or "anthropic". */
     provider: string;
     apiKey: string | undefined;
+    model: string;
+    /** Effort hint for providers that support one ("low" | "medium" | "high"); "default" = let the provider decide. */
+    effort: string | undefined;
+    /** Anthropic only: let the API re-run a request declined by the model's safety classifiers on a fallback model. */
+    refusalFallback: boolean;
+    timeoutMs: number;
+    maxRetries: number;
+    maxOutputTokens: number;
+    /** Upper bound on the chat text put into one prompt, in characters. */
+    maxContextChars: number;
+    rateLimitPerMinute: number;
+    rateLimitPerDay: number;
+    transcription: {
+      /** "none" (default) or "whisper-http" (any Whisper-compatible /audio/transcriptions endpoint). */
+      provider: string;
+      baseUrl: string | undefined;
+      apiKey: string | undefined;
+      model: string;
+      maxAudioBytes: number;
+    };
   };
   maxUploadSizeMb: number;
   /** Root directory for the local-disk media storage provider (development storage; see modules/media/storage). */
@@ -78,8 +100,24 @@ export const env: EnvConfig = {
     maxRequests: Number(process.env.RATE_LIMIT_MAX_REQUESTS ?? 100),
   },
   ai: {
-    provider: process.env.AI_PROVIDER ?? "none",
-    apiKey: process.env.AI_PROVIDER_API_KEY,
+    provider: (process.env.AI_PROVIDER ?? "none").trim().toLowerCase() || "none",
+    apiKey: readOptional("AI_PROVIDER_API_KEY"),
+    model: readOptional("AI_MODEL") ?? "claude-opus-5",
+    effort: readOptional("AI_EFFORT") ?? "medium",
+    refusalFallback: (process.env.AI_REFUSAL_FALLBACK ?? "true").trim().toLowerCase() !== "false",
+    timeoutMs: Number(process.env.AI_REQUEST_TIMEOUT_MS ?? 60_000),
+    maxRetries: Number(process.env.AI_MAX_RETRIES ?? 2),
+    maxOutputTokens: Number(process.env.AI_MAX_OUTPUT_TOKENS ?? 8000),
+    maxContextChars: Number(process.env.AI_MAX_CONTEXT_CHARS ?? 24_000),
+    rateLimitPerMinute: Number(process.env.AI_RATE_LIMIT_PER_MINUTE ?? 10),
+    rateLimitPerDay: Number(process.env.AI_RATE_LIMIT_PER_DAY ?? 200),
+    transcription: {
+      provider: (process.env.TRANSCRIPTION_PROVIDER ?? "none").trim().toLowerCase() || "none",
+      baseUrl: readOptional("TRANSCRIPTION_BASE_URL"),
+      apiKey: readOptional("TRANSCRIPTION_API_KEY"),
+      model: readOptional("TRANSCRIPTION_MODEL") ?? "whisper-1",
+      maxAudioBytes: Number(process.env.TRANSCRIPTION_MAX_AUDIO_MB ?? 25) * 1024 * 1024,
+    },
   },
   maxUploadSizeMb: Number(process.env.MAX_UPLOAD_SIZE_MB ?? 25),
   uploadDir: process.env.UPLOAD_DIR ?? "uploads",

@@ -5,7 +5,7 @@ import { type Container, type ContainerOverrides, createContainer } from "./cont
 import { env } from "./config/env";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler";
 import { apiRateLimiter } from "./middleware/rateLimiter";
-import { aiRouter } from "./modules/ai/ai.routes";
+import { createAIRouter } from "./modules/ai/ai.routes";
 import { createAuthRouter } from "./modules/auth/auth.routes";
 import { createCallsRouter } from "./modules/calls/calls.routes";
 import { createConversationsRouter } from "./modules/conversations/conversations.routes";
@@ -51,7 +51,7 @@ export function createApp(overrides: ContainerOverrides = {}): AppInstance {
   apiV1.use("/statuses", createStatusesRouter(container.statusesService));
   apiV1.use("/notifications", notificationsRouter);
   apiV1.use("/privacy", privacyRouter);
-  apiV1.use("/ai", aiRouter);
+  apiV1.use("/ai", createAIRouter(container.ai));
 
   app.use("/api/v1", apiV1);
 

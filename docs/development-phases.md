@@ -132,13 +132,26 @@ to a later phase.
 - Media follow-ups: object storage provider, thumbnails, voice recording,
   malware scanning, abandoned-upload cleanup
 
-## Phase 5 — AI Features (planned)
+## Phase 5 — AI Features & Privacy Layer ✅
 
-- Wire up a real `AIProvider` implementation
-- Implement Ask Your Chats, chat search, and AI Chat Memory (with consent
-  UI backed by real `privacy_settings` persistence)
-- Voice Intelligence, Group Decision AI, Scam/Spam Shield, Smart Action
-  Extraction, Live Translation
+- Vendor-neutral `AIProvider`/`TranscriptionProvider`; Anthropic (Claude)
+  and Whisper-compatible HTTP implementations; honest `none` default
+- `AIGateway`: per-user rate limits, timeouts, bounded retries, schema
+  validation of model output, metadata-only usage log, `ai:*` status events
+- Consent settings (all off by default), per-chat exclusions, data-sharing
+  disclosure — Settings → AI Features
+- Ask Your Chats (with real source messages), explicit AI Memory, Smart
+  Action suggestions (confirm/edit/dismiss; nothing scheduled), Group
+  Decision AI, on-request Translation (cached), Scam/Spam Shield (local
+  heuristics + optional AI check), Voice Intelligence foundation
+- Authorization + prompt-injection defenses shared by every feature
+  (see [ai.md](./ai.md))
+- Migration `004_ai_layer.sql`; backend tests also run green against real
+  PostgreSQL
+- **Verified by:** API tests with a scripted provider, frontend component
+  tests. **Real model/transcription output requires the manual test plan**
+  ([manual-testing-phase5.md](./manual-testing-phase5.md)).
+- **Known limitations:** see [ai.md](./ai.md#known-limitations)
 
 ## Phase 6 — Multi-device, Scale & Productivity (planned)
 

@@ -77,6 +77,12 @@ export type ServerEvent =
       viewedAt: Date;
       viewCount: number;
     }
+  // --- AI (Phase 5) ---
+  // Status only, sent solely to the user who made the AI request (all their
+  // devices). Never carries prompts, message content or model output.
+  | { type: "ai:processing"; requestId: string; feature: string }
+  | { type: "ai:completed"; requestId: string; feature: string }
+  | { type: "ai:failed"; requestId: string; feature: string; code: string }
   | { type: "error"; message: string };
 
 export interface IceCandidatePayload {

@@ -93,9 +93,14 @@
   are only in the owner's DTOs. "Contacts" requires the owner's own
   engagement in the direct chat, so a stranger can't become a contact by
   messaging you. Expiry is decided and checked by the server.
-- **Consent-gated AI design** — see [ai-roadmap.md](./ai-roadmap.md); AI
-  features are structurally required to check `privacy_settings` before
-  acting.
+- **AI features (Phase 5)** — see [ai.md](./ai.md). Opt-in consent
+  checked server-side before any provider call; conversation membership,
+  join-time visibility and per-chat exclusions enforced in the retrieval
+  SQL; untrusted message content delimited and escaped in prompts; model
+  output schema-validated and every cited message mapped back to a real,
+  visible message; per-user AI rate limits; provider keys backend-only;
+  usage log stores metadata only; AI results and status events go only to
+  the requester.
 
 ## What is explicitly NOT implemented yet
 
@@ -139,6 +144,13 @@ none:
   of "Everyone I chat with" statuses.
 - **No account recovery / password reset flow.**
 - **No 2FA.**
+- **AI content leaves the server when a provider is configured.** Chats a
+  user selects (and voice audio they choose) are sent to the configured
+  AI/transcription provider, whose retention is governed by that
+  provider's terms. Prompt-injection defenses reduce, but can't eliminate,
+  the chance a crafted message skews an answer — which is why answers are
+  labeled AI-generated and tied to their sources. Scam reports are stored
+  but not reviewed by anyone yet.
 - **No per-user rate limiting on message sending** — only the global/IP
   limiters apply; a single authenticated user could still send messages in
   rapid succession.
@@ -149,10 +161,6 @@ none:
   until expiry with no way to revoke it early. Once `sessions` is actually
   written to, add a revocation check (e.g. a `sessions.revoked_at` lookup)
   to `requireAuth`.
-- `privacy_settings.ai_memory_enabled` is the single gate every memory
-  extraction call must check. When implementing `MemoryExtractionService`,
-  treat a missing/false consent value as "do not extract," not as "assume
-  yes."
 - The WebSocket gateway tracks online users (and `CallsService` tracks
   call device bindings) in-process — `ConnectionRegistry` (see [architecture.md](./architecture.md)) — running
   multiple backend instances would need a shared registry/pub-sub before

@@ -135,6 +135,8 @@ export class MessagesRepository {
   async updateBody(messageId: string, body: string | null, mentionedUserIds: string[]): Promise<void> {
     await this.db.withTransaction(async (tx) => {
       await tx.query("UPDATE messages SET body = $2, edited_at = now() WHERE id = $1", [messageId, body]);
+      // Cached AI translations are of the old text — drop them (Phase 5).
+      await tx.query("DELETE FROM ai_translations WHERE message_id = $1", [messageId]);
       await tx.query("DELETE FROM message_mentions WHERE message_id = $1", [messageId]);
       for (const userId of mentionedUserIds) {
         await tx.query("INSERT INTO message_mentions (message_id, user_id) VALUES ($1, $2)", [messageId, userId]);
@@ -153,6 +155,8 @@ export class MessagesRepository {
       const attachments = await this.mediaRepository.findByMessageIds([messageId], tx);
       await tx.query("UPDATE messages SET body = NULL, deleted_at = now() WHERE id = $1", [messageId]);
       await tx.query("DELETE FROM message_mentions WHERE message_id = $1", [messageId]);
+      // A soft-deleted message keeps its row, so its cached translations must go explicitly (Phase 5).
+      await tx.query("DELETE FROM ai_translations WHERE message_id = $1", [messageId]);
       for (const attachment of attachments) {
         await this.mediaRepository.deleteById(attachment.id, tx);
       }

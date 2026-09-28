@@ -16,7 +16,12 @@ enforced structurally rather than left to prompt engineering alone:
    conversations that user is a member of. No AI feature is a backdoor
    around normal access control.
 
-## Feature-by-feature status
+> **Phase 5 status:** implemented. The current design, API and privacy
+> model are documented in [ai.md](./ai.md); the rest of this file records
+> the original Phase 1 design commitments, all of which Phase 5 keeps
+> (per-feature services replaced the Phase 1 per-feature interfaces).
+
+## Feature-by-feature status (Phase 1 — historical)
 
 | Feature | Interface | Phase 1 status |
 |---|---|---|

@@ -2,7 +2,7 @@ import { Link, NavLink, useLocation } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 import { useConversations } from "../../context/ConversationsContext";
 import { Avatar } from "../ui/Avatar";
-import { ChatIcon, LogoutIcon, SettingsIcon, StatusIcon } from "../ui/icons";
+import { ChatIcon, LogoutIcon, SettingsIcon, SparkleIcon, StatusIcon } from "../ui/icons";
 
 function navLinkClasses(isActive: boolean): string {
   return `relative flex h-11 w-11 items-center justify-center rounded-xl transition-colors ${
@@ -38,6 +38,9 @@ export function Sidebar() {
         </Link>
         <NavLink to="/app/status" className={({ isActive }) => navLinkClasses(isActive)} aria-label="Status">
           <StatusIcon />
+        </NavLink>
+        <NavLink to="/app/ai" className={({ isActive }) => navLinkClasses(isActive)} aria-label="Ask Your Chats">
+          <SparkleIcon />
         </NavLink>
         <NavLink to="/app/settings" className={({ isActive }) => navLinkClasses(isActive)} aria-label="Settings">
           <SettingsIcon />

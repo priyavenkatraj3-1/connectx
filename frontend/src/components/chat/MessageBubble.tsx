@@ -15,6 +15,8 @@ interface MessageBubbleProps {
   onReply(message: MessageDTO): void;
   onEdit(message: MessageDTO): void;
   onDelete(message: MessageDTO): Promise<void>;
+  /** Optional AI tools/results rendered inside the bubble (Phase 5); absent outside the app shell. */
+  aiSlot?: ReactNode;
 }
 
 function escapeRegExp(text: string): string {
@@ -54,6 +56,7 @@ export function MessageBubble({
   onReply,
   onEdit,
   onDelete,
+  aiSlot,
 }: MessageBubbleProps) {
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -117,6 +120,8 @@ export function MessageBubble({
             {renderBodyWithMentions(message.body, message.mentions ?? [], currentUserId)}
           </p>
         )}
+
+        {aiSlot}
 
         <div
           className={`mt-1 flex items-center justify-end gap-1 text-[11px] ${isOwn ? "text-white/70" : "text-slate-400"}`}

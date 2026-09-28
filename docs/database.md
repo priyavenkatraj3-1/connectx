@@ -127,15 +127,21 @@ is `SET NULL`. See [calls.md](./calls.md).
 | `status_views` | `PRIMARY KEY (status_id, viewer_id)` — one view record per user per status |
 | `status_privacy_settings` / `status_privacy_users` | A user's default status visibility and list |
 | `notifications` | Generic notification envelope with a `payload` JSONB column so new notification types don't require schema changes |
-| `privacy_settings` | 1:1 with `users`; **also the consent record AI features must check** (`ai_features_enabled`, `ai_memory_enabled`) |
+| `privacy_settings` | 1:1 with `users`; **also the AI consent record** (`ai_features_enabled`, `ai_memory_enabled`, and from Phase 5 `ai_chat_retrieval_enabled`, `ai_spam_shield_enabled`, `ai_voice_enabled`, `ai_preferred_language`, `ai_consented_at`) |
 
-### AI (deliberately isolated)
+### AI (deliberately isolated, Phase 5)
+
+Every AI table references its owning user `ON DELETE CASCADE`. See [ai.md](./ai.md#data-stored--retention).
 
 | Table | Purpose |
 |---|---|
-| `ai_conversations` | One row per AI feature invocation (a question asked, a summary run). Never mixed with real `messages` rows |
-| `ai_memories` | User-visible, user-deletable facts extracted with consent — see `MemoryExtractionService` |
-| `ai_actions` | Suggested tasks/reminders/events; `confirmed_at` is null until the user explicitly confirms — nothing here is a real action until then |
+| `ai_conversation_exclusions` | Chats a user excluded from their own AI features |
+| `ai_memories` | **Re-created in Phase 5.** User-written memory items (`preference`/`fact`/`context`/`working`), optional source message. Never extracted automatically |
+| `ai_actions` | **Re-created in Phase 5.** Suggested tasks/reminders/deadlines/events with `status` `suggested` → `confirmed`/`dismissed` only by explicit user action. Nothing here schedules anything |
+| `ai_translations` | Translation cache per (message, language), tied to a SHA-256 of the source text; purged on edit/delete |
+| `ai_message_flags` | Scam-warning dismiss/report per (user, message) |
+| `ai_voice_results` | Transcript / summary / action items per (user, audio attachment) |
+| `ai_usage` | Replaces `ai_conversations`. Metadata only (feature, provider, model, status, tokens, latency) — **never prompt or output text**. Also backs the daily AI limit |
 
 ## Why AI data is isolated
 
@@ -170,6 +176,7 @@ Three reasons, all deliberate:
 | `001_initial_schema.sql` | 1–2 | Every Phase 1/2 table |
 | `002_groups_media.sql` | 3 | `groups.updated_at`, `group_members.updated_at`, one-owner partial unique index, active-members index, `message_mentions`, reply index, attachment columns + indexes. Purely additive — no existing data is modified |
 | `003_calls_status.sql` | 4 | `call_sessions`, `call_participants`, `call_events`; `attachments.purpose` (default `message`) with `conversation_id` now nullable for status media (a `CHECK` keeps message attachments tied to a conversation); `statuses` dropped and re-created (never used before), `status_audience`, `status_views`, `status_privacy_settings`, `status_privacy_users`. Existing rows untouched |
+| `004_ai_layer.sql` | 5 | New `privacy_settings` AI columns; `ai_conversation_exclusions`, `ai_translations`, `ai_message_flags`, `ai_voice_results`, `ai_usage`. The never-used Phase 1 placeholders `ai_conversations`, `ai_memories`, `ai_actions` are dropped (`ai_memories`/`ai_actions` re-created). All other data untouched |
 
 Apply with `npm run db:migrate --workspace=backend` (idempotent; each file
 runs once, in its own transaction, recorded in `schema_migrations`).

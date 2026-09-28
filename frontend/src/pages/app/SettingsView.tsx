@@ -1,6 +1,8 @@
 import { useState, type ReactNode } from "react";
 import { useAuth } from "../../context/AuthContext";
+import { AISettingsPanel } from "../../components/ai/AISettingsPanel";
 import { Avatar } from "../../components/ui/Avatar";
+import { useOptionalAI } from "../../context/AIContext";
 
 type SettingsSection = "account" | "privacy" | "ai" | "notifications";
 
@@ -14,6 +16,7 @@ const SECTIONS: Array<{ id: SettingsSection; label: string; description: string 
 export function SettingsView() {
   const [active, setActive] = useState<SettingsSection>("account");
   const { user } = useAuth();
+  const ai = useOptionalAI();
 
   return (
     <div className="flex flex-1 overflow-hidden">
@@ -73,10 +76,11 @@ export function SettingsView() {
               ConnectX's AI features are off by default and only ever act on conversations you're a
               part of. Each feature below requires your explicit consent before it activates.
             </p>
-            <SettingRow label="Ask Your Chats" description="Ask natural-language questions about your own conversations" comingSoon />
-            <SettingRow label="AI Chat Memory" description="Let ConnectX remember useful details you choose to share" comingSoon />
-            <SettingRow label="Voice Intelligence" description="Transcribe and summarize voice messages" comingSoon />
-            <SettingRow label="Scam/Spam Shield" description="Flag suspicious links and messages with an explanation" comingSoon />
+            {ai ? (
+              <AISettingsPanel />
+            ) : (
+              <p className="text-sm text-slate-500 dark:text-slate-400">AI settings are available inside the app.</p>
+            )}
           </SettingsCard>
         )}
 

@@ -1,5 +1,20 @@
 import { env } from "./config/env";
 import { type DatabaseClient, getDb } from "./db/pool";
+import { AISettingsService } from "./modules/ai/ai-settings.service";
+import type { AIServices } from "./modules/ai/ai.controller";
+import { AIGateway } from "./modules/ai/ai.gateway";
+import { AIRateLimiter } from "./modules/ai/ai.rate-limiter";
+import { AIRepository } from "./modules/ai/ai.repository";
+import { AIContextService } from "./modules/ai/context/ai-context.service";
+import { SmartActionsService } from "./modules/ai/features/actions.service";
+import { AskYourChatsService } from "./modules/ai/features/ask.service";
+import { GroupDecisionService } from "./modules/ai/features/group-decision.service";
+import { AIMemoryService } from "./modules/ai/features/memory.service";
+import { ScamShieldService } from "./modules/ai/features/scam-shield.service";
+import { TranslationService } from "./modules/ai/features/translation.service";
+import { VoiceIntelligenceService } from "./modules/ai/features/voice.service";
+import type { AIProvider, TranscriptionProvider } from "./modules/ai/interfaces/ai-provider.interface";
+import { createAIProvider, createTranscriptionProvider } from "./modules/ai/providers/provider.factory";
 import { AuthService } from "./modules/auth/auth.service";
 import { CallsRepository } from "./modules/calls/calls.repository";
 import { CallsService } from "./modules/calls/calls.service";
@@ -33,6 +48,21 @@ export interface ContainerOverrides {
   callReconnectGraceMs?: number;
   /** Max joined participants in a (mesh) group call. Defaults to MAX_MESH_PARTICIPANTS. */
   callMaxMeshParticipants?: number;
+  /** AI text provider. Defaults to the one selected by AI_PROVIDER; tests inject fakes. */
+  aiProvider?: AIProvider;
+  /** Speech-to-text provider. Defaults to TRANSCRIPTION_PROVIDER. */
+  transcriptionProvider?: TranscriptionProvider;
+  /** AI limits/timeouts. Defaults come from env (AI_*). */
+  aiOptions?: Partial<{
+    timeoutMs: number;
+    maxRetries: number;
+    retryBaseDelayMs: number;
+    maxOutputTokens: number;
+    maxContextChars: number;
+    rateLimitPerMinute: number;
+    rateLimitPerDay: number;
+    maxAudioBytes: number;
+  }>;
 }
 
 export interface Container {
@@ -49,6 +79,7 @@ export interface Container {
   mediaService: MediaService;
   callsService: CallsService;
   statusesService: StatusesService;
+  ai: AIServices;
 }
 
 /**
@@ -119,6 +150,43 @@ export function createContainer(overrides: ContainerOverrides = {}): Container {
     }
   );
 
+  const aiOptions = overrides.aiOptions ?? {};
+  const aiRepository = new AIRepository(db);
+  const aiGateway = new AIGateway(
+    overrides.aiProvider ?? createAIProvider(),
+    overrides.transcriptionProvider ?? createTranscriptionProvider(),
+    aiRepository,
+    new AIRateLimiter(aiRepository, {
+      perMinute: aiOptions.rateLimitPerMinute ?? env.ai.rateLimitPerMinute,
+      perDay: aiOptions.rateLimitPerDay ?? env.ai.rateLimitPerDay,
+    }),
+    delegatingGateway,
+    {
+      timeoutMs: aiOptions.timeoutMs ?? env.ai.timeoutMs,
+      maxRetries: aiOptions.maxRetries ?? env.ai.maxRetries,
+      retryBaseDelayMs: aiOptions.retryBaseDelayMs,
+      maxOutputTokens: aiOptions.maxOutputTokens ?? env.ai.maxOutputTokens,
+    }
+  );
+  const aiSettingsService = new AISettingsService(aiRepository, conversationsRepository, aiGateway);
+  const aiContext = new AIContextService(aiRepository, { maxContextChars: aiOptions.maxContextChars ?? env.ai.maxContextChars });
+  const ai: AIServices = {
+    settings: aiSettingsService,
+    ask: new AskYourChatsService(aiSettingsService, aiContext, aiRepository, aiGateway),
+    memory: new AIMemoryService(aiSettingsService, aiRepository, messagesRepository),
+    actions: new SmartActionsService(aiSettingsService, aiContext, aiRepository, aiGateway),
+    groupDecision: new GroupDecisionService(aiSettingsService, aiContext, aiGateway),
+    translation: new TranslationService(aiSettingsService, aiRepository, messagesRepository, aiGateway),
+    scamShield: new ScamShieldService(aiSettingsService, aiRepository, messagesRepository, aiGateway),
+    voice: new VoiceIntelligenceService(
+      aiSettingsService,
+      aiRepository,
+      mediaService,
+      aiGateway,
+      aiOptions.maxAudioBytes ?? env.ai.transcription.maxAudioBytes
+    ),
+  };
+
   return {
     db,
     realtimeGatewayRef,
@@ -132,5 +200,6 @@ export function createContainer(overrides: ContainerOverrides = {}): Container {
     mediaService,
     callsService,
     statusesService,
+    ai,
   };
 }
