@@ -1,25 +1,43 @@
-import { createContext, useCallback, useContext, useEffect, useRef, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { WS_BASE_URL } from "../services/apiClient";
 import type { ClientEvent, ServerEvent } from "../types/realtime";
 import { useAuth } from "./AuthContext";
 
 type Listener = (event: ServerEvent) => void;
 
-interface RealtimeContextValue {
+export interface RealtimeContextValue {
   /** Subscribes to every server event; returns an unsubscribe function. */
   subscribe(listener: Listener): () => void;
-  send(event: ClientEvent): void;
+  /** Sends an event if the socket is open. Returns false if it couldn't be sent. */
+  send(event: ClientEvent): boolean;
+  /**
+   * This tab's connection ID, sent to the server as `cid` and kept across
+   * reconnects. Calls started from this tab are bound to it, so WebRTC
+   * signaling reaches this tab only — not the user's other tabs/devices.
+   */
+  connectionId: string;
 }
 
-const RealtimeContext = createContext<RealtimeContextValue | undefined>(undefined);
+/** Exported so tests can provide a fake realtime channel. */
+export const RealtimeContext = createContext<RealtimeContextValue | undefined>(undefined);
 
 const RECONNECT_DELAY_MS = 2000;
+
+function generateConnectionId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  // RFC 4122 v4 fallback for older browsers.
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    return (c === "x" ? r : (r & 0x3) | 0x8).toString(16);
+  });
+}
 
 export function RealtimeProvider({ children }: { children: ReactNode }) {
   const { accessToken } = useAuth();
   const socketRef = useRef<WebSocket | null>(null);
   const listenersRef = useRef(new Set<Listener>());
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [connectionId] = useState(generateConnectionId);
 
   useEffect(() => {
     if (!accessToken) {
@@ -31,7 +49,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
 
     function connect(token: string): void {
-      const socket = new WebSocket(`${WS_BASE_URL}?token=${encodeURIComponent(token)}`);
+      const socket = new WebSocket(`${WS_BASE_URL}?token=${encodeURIComponent(token)}&cid=${connectionId}`);
       socketRef.current = socket;
 
       socket.onmessage = (messageEvent) => {
@@ -57,7 +75,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       socketRef.current?.close();
       socketRef.current = null;
     };
-  }, [accessToken]);
+  }, [accessToken, connectionId]);
 
   const subscribe = useCallback((listener: Listener) => {
     listenersRef.current.add(listener);
@@ -68,10 +86,13 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     const socket = socketRef.current;
     if (socket && socket.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify(event));
+      return true;
     }
+    return false;
   }, []);
 
-  return <RealtimeContext.Provider value={{ subscribe, send }}>{children}</RealtimeContext.Provider>;
+  const value = useMemo(() => ({ subscribe, send, connectionId }), [subscribe, send, connectionId]);
+  return <RealtimeContext.Provider value={value}>{children}</RealtimeContext.Provider>;
 }
 
 export function useRealtime(): RealtimeContextValue {

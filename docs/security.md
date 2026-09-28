@@ -72,6 +72,27 @@
   can delete an unsent upload. Responses carry `nosniff`, `private,
   no-store`, a sandboxing CSP, and documents are served as downloads
   (`Content-Disposition: attachment`), not rendered inline.
+- **Call authorization (Phase 4)** — only active members of a
+  conversation can start, see or join its calls; direct calls can only be
+  answered by the invitee while ringing; removed group members can't join;
+  call history only includes calls you were invited to or started. The
+  caller must supply one of their *own* open connection IDs.
+- **Signaling integrity (Phase 4)** — every WebSocket event is
+  schema-validated (UUIDs, SDP ≤64KB, strict ICE shape, frames ≤128KB);
+  identity comes only from the authenticated socket (client-supplied user
+  fields are discarded); offers/answers/candidates are accepted only from
+  a *joined* participant's *bound* connection and delivered only to the
+  target's bound connection; everything else gets `call:error`. An
+  unhandled-socket-error crash (oversized frame) was fixed along the way.
+- **Call privacy (Phase 4)** — only call metadata is stored; SDP, ICE
+  candidates and media are never stored or logged.
+- **Status privacy (Phase 4)** — enforced server-side in one place
+  (`StatusesRepository.canView`) for the feed, lookups, views, media
+  downloads and realtime events; hidden/expired/nonexistent statuses are
+  indistinguishable (`404`); viewer lists are owner-only; privacy details
+  are only in the owner's DTOs. "Contacts" requires the owner's own
+  engagement in the direct chat, so a stranger can't become a contact by
+  messaging you. Expiry is decided and checked by the server.
 - **Consent-gated AI design** — see [ai-roadmap.md](./ai-roadmap.md); AI
   features are structurally required to check `privacy_settings` before
   acting.
@@ -81,7 +102,10 @@
 Be precise about this — overstating security posture is worse than having
 none:
 
-- **No end-to-end encryption** — for direct chats, groups, or media.
+- **No end-to-end encryption** — for direct chats, groups, media, statuses
+  or calls. (WebRTC encrypts call media in transit with DTLS-SRTP, but the
+  server relays signaling and there is no key verification, so this is
+  *not* an E2EE guarantee.)
   Messages are stored as plaintext in
   PostgreSQL and transmitted over TLS only if you deploy behind TLS
   yourself (not configured in this repo). Do not describe ConnectX as
@@ -106,6 +130,13 @@ none:
   global API limiter.
 - **Group admins cannot moderate (delete) other people's messages** —
   deletion is author-only in this phase.
+- **Calls reveal network addresses** — peer-to-peer WebRTC exposes
+  participants' IP addresses to each other (ICE candidates); there's no
+  TURN-only/relay-only mode.
+- **No rate limit on call attempts or signaling messages** beyond payload
+  caps — a member could repeatedly ring the others in their conversations.
+- **Group membership doesn't require consent**, and it grants visibility
+  of "Everyone I chat with" statuses.
 - **No account recovery / password reset flow.**
 - **No 2FA.**
 - **No per-user rate limiting on message sending** — only the global/IP
@@ -122,8 +153,8 @@ none:
   extraction call must check. When implementing `MemoryExtractionService`,
   treat a missing/false consent value as "do not extract," not as "assume
   yes."
-- The WebSocket gateway tracks online users in an in-process
-  `ConnectionRegistry` (see [architecture.md](./architecture.md)) — running
+- The WebSocket gateway tracks online users (and `CallsService` tracks
+  call device bindings) in-process — `ConnectionRegistry` (see [architecture.md](./architecture.md)) — running
   multiple backend instances would need a shared registry/pub-sub before
   delivery/online-status guarantees hold across instances.
 

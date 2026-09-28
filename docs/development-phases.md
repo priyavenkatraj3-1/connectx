@@ -48,7 +48,7 @@ at once."
 - **Not yet implemented:** group conversations, message edit/delete/reactions,
   refresh-token rotation/revocation, file attachments
 
-## Phase 3 — Groups & Media Foundation ✅ (this phase)
+## Phase 3 — Groups & Media Foundation ✅
 
 Scope was narrowed from the original "Groups, Voice/Video & Notifications"
 plan: calls, status and notifications moved to Phase 4 so this phase could
@@ -90,11 +90,44 @@ ship group chat and the media foundation properly.
   leaving, no admin moderation of others' messages, avatar is a URL only,
   delivery receipts are only recorded for recipients online at send time
 
-## Phase 4 — Calls, Status & Notifications (planned)
+## Phase 4 — Calls & Status ✅ (this phase)
 
-- Calling infrastructure (signaling + media transport), screen sharing
-- Status/stories with expiry cleanup job
-- Push notification delivery (web push, mobile push), mention notifications
+Scope was narrowed from "Calls, Status & Notifications": push/mention
+notifications, screen sharing, communities and the media follow-ups moved
+to a later phase.
+
+- **Calls:** WebRTC 1:1 voice and video calls, signaled over the existing
+  authenticated WebSocket (per-device binding, validated events); full
+  lifecycle (ringing/accepted/connecting/connected/declined/missed/ended/
+  failed/cancelled) with DB-enforced invariants, ring timeout, busy
+  detection, reconnect grace, restart recovery
+- **Group call foundation:** peer-to-peer mesh capped at 8, invite/join/
+  leave/decline, join-in-progress banner, mute indicators — documented as
+  not production-scale; designed so an SFU can replace the mesh
+- **STUN/TURN** from env, including time-limited TURN credentials; nothing
+  hard-coded; empty by default (same machine/LAN)
+- **Call history** inline in chats, per-viewer direction/outcome/duration
+- **Status/stories:** text/photo/video, 24h server-decided expiry,
+  feed/viewer UI, delete, owner-only viewer list, realtime updates, expiry
+  sweep that deletes rows and media
+- **Status privacy:** contacts / contacts except / only share with /
+  everyone-I-chat-with, per status or default, enforced server-side
+  everywhere (including media downloads and realtime fan-out)
+- Status media reuses the Phase 3 upload pipeline (`attachments.purpose`)
+- Migration `003_calls_status.sql`; backend tests also run green against
+  real PostgreSQL
+- **Verified by:** backend API + real-WebSocket signaling tests; frontend
+  tests against fake WebRTC. **Real audio/video requires the manual test
+  plan** ([manual-testing-phase4.md](./manual-testing-phase4.md)).
+- **Known limitations:** see [calls.md](./calls.md#known-limitations) and
+  [status.md](./status.md#known-limitations) — notably TURN required for
+  restrictive networks, mesh-only group calls, single-instance in-memory
+  call state, no push notifications
+
+## Later — Notifications, Communities & Media follow-ups (planned)
+
+- Push notification delivery (web push, mobile push), mention and missed-call notifications
+- Screen sharing; an SFU/media server for larger group calls
 - Communities/channels
 - Media follow-ups: object storage provider, thumbnails, voice recording,
   malware scanning, abandoned-upload cleanup

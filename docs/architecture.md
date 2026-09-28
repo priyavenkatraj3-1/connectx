@@ -141,6 +141,44 @@ touches the `ws` package directly, so the transport could be swapped
 without touching business logic. See [api.md](./api.md#realtime--websocket-gateway)
 for the full event catalog.
 
+## Calls: WebRTC media, WebSocket signaling (Phase 4)
+
+Audio/video flows **browser-to-browser over WebRTC** (directly, or via a
+TURN relay); the backend never sees media. `CallsService` is the
+authority for who may call whom and for each call's state, and relays SDP
+and ICE candidates over the existing gateway. Key design points:
+
+- **Per-device binding.** Each WebSocket connection has a connection ID
+  (`cid`); a participant is bound to the connection they started/accepted
+  from, and signaling goes only there (`RealtimeGateway.sendToConnection`)
+  — never to their other tabs.
+- **Validated inbound events.** `realtime/client-events.ts` (Zod) checks
+  every client event; identity is always the socket's user.
+  `ws.server.ts` routes `call:*` events to `CallsService` via
+  `realtime/gateway-handlers.ts` (shared by `server.ts` and tests).
+- **Race-free state machine.** Conditional `UPDATE … WHERE state IN (…)`
+  transitions, a per-call in-process mutex, a partial unique index for one
+  live call per conversation, and a `CHECK` tying `ended_at` to terminal
+  states.
+- **Ephemeral state in memory** (bindings, ring timers, mic/camera flags),
+  matching the single-instance gateway; stale live calls are failed at
+  startup.
+- **Group calls = mesh** on the client (`lib/webrtc/peerMesh.ts`), capped
+  at 8 on the server — the session/participant model is designed so an SFU
+  can replace the mesh later.
+
+Full details: [calls.md](./calls.md).
+
+## Status: privacy decided in one place (Phase 4)
+
+`StatusesRepository.canView` is the single privacy decision point, used by
+the feed, direct lookups, view tracking, realtime fan-out, and — through
+the `StatusMediaAccess` interface injected into `MediaService` — status
+media downloads. Status media reuses the Phase 3 upload pipeline
+(`attachments.purpose = 'status'`, no conversation). Expiry is a SQL
+predicate on the database clock; a 60-second sweep in `server.ts` deletes
+expired rows/media and notifies clients. Details: [status.md](./status.md).
+
 ## AI architecture
 
 AI features are built against a provider-agnostic abstraction
@@ -235,7 +273,8 @@ the preview must change) trigger a quiet background refetch.
   issuance/verification is implemented; refresh-token rotation and
   server-side revocation are not yet.
 - A user's realtime connections are tracked per-process, in memory
-  (`ConnectionRegistry`). Running more than one backend instance behind a
+  (`ConnectionRegistry`) — and so are live-call device bindings and ring
+  timers (`CallsService`). Running more than one backend instance behind a
   load balancer would require a shared pub/sub layer (e.g. Redis) so an
   event for a user connected to instance B can be delivered even when the
   message was sent via instance A — not needed at this scale, but worth

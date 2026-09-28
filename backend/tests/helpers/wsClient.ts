@@ -58,9 +58,10 @@ export function createMessageQueue(ws: WebSocket) {
   };
 }
 
-export function connect(baseWsUrl: string, token: string): Promise<WebSocket> {
+/** Opens an authenticated socket. `cid` is the optional client-chosen connection ID (see ws.server.ts). */
+export function connect(baseWsUrl: string, token: string, cid?: string): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`${baseWsUrl}?token=${token}`);
+    const ws = new WebSocket(`${baseWsUrl}?token=${token}${cid ? `&cid=${cid}` : ""}`);
     ws.once("open", () => resolve(ws));
     ws.once("error", reject);
   });

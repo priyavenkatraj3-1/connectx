@@ -1,0 +1,17 @@
+import type { Container } from "../container";
+import type { WebSocketGatewayOptions } from "./ws.server";
+
+/**
+ * Connects the WebSocket gateway's inbound events to the services that
+ * handle them. Shared by server.ts and the realtime tests so both wire the
+ * gateway identically.
+ */
+export function buildGatewayOptions(container: Container): WebSocketGatewayOptions {
+  return {
+    onClientRead: (userId, conversationId, upToMessageId) =>
+      container.messagesService.markRead(conversationId, userId, upToMessageId),
+    onCallEvent: (ctx, event) => container.callsService.handleClientEvent(ctx, event),
+    onConnect: (ctx) => container.callsService.handleConnect(ctx),
+    onDisconnect: (ctx) => container.callsService.handleDisconnect(ctx),
+  };
+}

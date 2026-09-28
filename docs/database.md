@@ -103,13 +103,29 @@ unique index on `storage_key`. An upload creates a row with
 conditional `UPDATE … WHERE message_id IS NULL` so the same upload can't be
 attached twice concurrently. The bytes live outside the database behind
 the `StorageProvider` interface (local disk in development); the row
-stores only the opaque `storage_key` (`<conversationId>/<attachmentId>`).
+stores only the opaque `storage_key` (`<conversationId>/<attachmentId>`,
+or `statuses/<ownerId>/<attachmentId>` for status media — Phase 4 adds
+`purpose` = `message` | `status`).
+
+### Calls (Phase 4)
+
+| Table | Purpose |
+|---|---|
+| `call_sessions` | One call: conversation, initiator, `scope` (direct/group), `media` (voice/video), `state`, `end_reason`, `created_at`/`answered_at`/`connected_at`/`ended_at`, `duration_seconds`. Partial unique index `uq_call_sessions_one_live_per_conversation` (`WHERE ended_at IS NULL`); `CHECK ((ended_at IS NULL) = state IN live states)` |
+| `call_participants` | `PRIMARY KEY (call_id, user_id)` — one row per user per call: `role` (initiator/invitee), `state` (invited/ringing/joined/declined/missed/left), join/leave times |
+| `call_events` | Metadata-only audit trail (created, ringing, accepted, joined, declined, cancelled, connected, left, ended, missed, failed). Never SDP/ICE/media |
+
+All cascade from `conversations` / `call_sessions`; `call_events.actor_id`
+is `SET NULL`. See [calls.md](./calls.md).
 
 ### Status / stories, notifications, privacy
 
 | Table | Purpose |
 |---|---|
-| `statuses` | Ephemeral posts with an `expires_at`; a background job (later phase) purges expired rows |
+| `statuses` | **Re-created in Phase 4** (the Phase 1 placeholder was never written to): `content_type`, `body`, `background_color`, unique `attachment_id`, `visibility` (everyone/contacts/selected/except), server-set `expires_at` (`CHECK expires_at > created_at`) |
+| `status_audience` | Per-status allow-list (`selected`) / deny-list (`except`) |
+| `status_views` | `PRIMARY KEY (status_id, viewer_id)` — one view record per user per status |
+| `status_privacy_settings` / `status_privacy_users` | A user's default status visibility and list |
 | `notifications` | Generic notification envelope with a `payload` JSONB column so new notification types don't require schema changes |
 | `privacy_settings` | 1:1 with `users`; **also the consent record AI features must check** (`ai_features_enabled`, `ai_memory_enabled`) |
 
@@ -153,6 +169,7 @@ Three reasons, all deliberate:
 |---|---|---|
 | `001_initial_schema.sql` | 1–2 | Every Phase 1/2 table |
 | `002_groups_media.sql` | 3 | `groups.updated_at`, `group_members.updated_at`, one-owner partial unique index, active-members index, `message_mentions`, reply index, attachment columns + indexes. Purely additive — no existing data is modified |
+| `003_calls_status.sql` | 4 | `call_sessions`, `call_participants`, `call_events`; `attachments.purpose` (default `message`) with `conversation_id` now nullable for status media (a `CHECK` keeps message attachments tied to a conversation); `statuses` dropped and re-created (never used before), `status_audience`, `status_views`, `status_privacy_settings`, `status_privacy_users`. Existing rows untouched |
 
 Apply with `npm run db:migrate --workspace=backend` (idempotent; each file
 runs once, in its own transaction, recorded in `schema_migrations`).
@@ -189,7 +206,7 @@ touches other schemas; drop it afterwards with
 
 ## Not yet in the schema (intentionally)
 
-Call/voice metadata, communities/channels, message search indexes (would likely need a
+Communities/channels, message search indexes (would likely need a
 full-text or vector index once "Ask Your Chats" is implemented), and
 payment/billing tables are out of scope for the current phase and are not
 modeled yet — adding them speculatively would just be guessing at

@@ -10,6 +10,10 @@ export const userService = {
     return apiRequest<OwnProfile>("/users/me", { method: "PATCH", body: updates, accessToken });
   },
 
+  getPublicProfile(accessToken: string, userId: string): Promise<PublicProfile> {
+    return apiRequest<PublicProfile>(`/users/${userId}`, { accessToken });
+  },
+
   async search(accessToken: string, query: string): Promise<PublicProfile[]> {
     if (!query.trim()) return [];
     const { results } = await apiRequest<{ results: PublicProfile[] }>(

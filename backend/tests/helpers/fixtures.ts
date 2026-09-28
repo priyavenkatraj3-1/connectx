@@ -30,11 +30,32 @@ export async function createGroup(
   return { groupId: res.body.group.id as string, conversationId: res.body.group.conversationId as string };
 }
 
+export async function createDirectConversation(app: Express, user: TestUser, other: TestUser): Promise<string> {
+  const res = await request(app)
+    .post("/api/v1/conversations/direct")
+    .set("Authorization", `Bearer ${user.accessToken}`)
+    .send({ userId: other.userId });
+  if (res.status !== 200) {
+    throw new Error(`createDirectConversation failed: ${res.status} ${JSON.stringify(res.body)}`);
+  }
+  return res.body.conversation.id as string;
+}
+
 export function sendMessage(app: Express, user: TestUser, conversationId: string, payload: Record<string, unknown>) {
   return request(app)
     .post(`/api/v1/messages/${conversationId}`)
     .set("Authorization", `Bearer ${user.accessToken}`)
     .send(payload);
+}
+
+/** Uploads status media (POST /media?purpose=status). */
+export function uploadStatusMedia(app: Express, user: TestUser, filename: string, data: Buffer, mimeType?: string) {
+  const query = new URLSearchParams({ purpose: "status", filename, ...(mimeType ? { mimeType } : {}) });
+  return request(app)
+    .post(`/api/v1/media?${query.toString()}`)
+    .set("Authorization", `Bearer ${user.accessToken}`)
+    .set("Content-Type", "application/octet-stream")
+    .send(data);
 }
 
 export function uploadFile(

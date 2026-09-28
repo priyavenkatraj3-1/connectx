@@ -1,9 +1,10 @@
 import type { DatabaseClient } from "../../db/pool";
-import type { AttachmentKind, AttachmentRecord } from "./media.types";
+import type { AttachmentKind, AttachmentPurpose, AttachmentRecord } from "./media.types";
 
 interface AttachmentRow {
   id: string;
-  conversation_id: string;
+  conversation_id: string | null;
+  purpose: AttachmentPurpose;
   message_id: string | null;
   uploader_id: string;
   storage_key: string;
@@ -15,13 +16,14 @@ interface AttachmentRow {
   updated_at: Date;
 }
 
-const ATTACHMENT_COLUMNS = `id, conversation_id, message_id, uploader_id, storage_key, original_filename, kind,
+const ATTACHMENT_COLUMNS = `id, conversation_id, purpose, message_id, uploader_id, storage_key, original_filename, kind,
   mime_type, size_bytes, created_at, updated_at`;
 
 function toRecord(row: AttachmentRow): AttachmentRecord {
   return {
     id: row.id,
     conversationId: row.conversation_id,
+    purpose: row.purpose,
     messageId: row.message_id,
     uploaderId: row.uploader_id,
     storageKey: row.storage_key,
@@ -40,7 +42,9 @@ export class MediaRepository {
 
   async insert(input: {
     id: string;
-    conversationId: string;
+    /** Required for message attachments, null for status media (enforced by a DB CHECK). */
+    conversationId: string | null;
+    purpose: AttachmentPurpose;
     uploaderId: string;
     storageKey: string;
     originalFilename: string;
@@ -49,12 +53,13 @@ export class MediaRepository {
     sizeBytes: number;
   }): Promise<AttachmentRecord> {
     const result = await this.db.query<AttachmentRow>(
-      `INSERT INTO attachments (id, conversation_id, uploader_id, storage_key, original_filename, kind, mime_type, size_bytes)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO attachments (id, conversation_id, purpose, uploader_id, storage_key, original_filename, kind, mime_type, size_bytes)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING ${ATTACHMENT_COLUMNS}`,
       [
         input.id,
         input.conversationId,
+        input.purpose,
         input.uploaderId,
         input.storageKey,
         input.originalFilename,

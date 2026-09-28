@@ -14,6 +14,20 @@ export class FakeRealtimeGateway implements RealtimeGateway {
     return this.onlineUserIds.has(userId);
   }
 
+  /** Connections tests have declared open, as "userId:connectionId". */
+  openConnections = new Set<string>();
+  readonly connectionEvents: Array<{ userId: string; connectionId: string; event: ServerEvent }> = [];
+
+  sendToConnection(userId: string, connectionId: string, event: ServerEvent): boolean {
+    if (!this.openConnections.has(`${userId}:${connectionId}`)) return false;
+    this.connectionEvents.push({ userId, connectionId, event });
+    return true;
+  }
+
+  hasConnection(userId: string, connectionId: string): boolean {
+    return this.openConnections.has(`${userId}:${connectionId}`);
+  }
+
   eventsFor(userId: string): ServerEvent[] {
     return this.sentEvents.filter((entry) => entry.userId === userId).map((entry) => entry.event);
   }

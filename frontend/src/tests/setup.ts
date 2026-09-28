@@ -32,6 +32,10 @@ class StubWebSocket {
 // @ts-expect-error - intentionally partial implementation, sufficient for tests
 globalThis.WebSocket = StubWebSocket;
 
+// jsdom doesn't implement media playback (used by the call screen's <video>/<audio> elements).
+Object.defineProperty(HTMLMediaElement.prototype, "play", { configurable: true, value: () => Promise.resolve() });
+Object.defineProperty(HTMLMediaElement.prototype, "pause", { configurable: true, value: () => undefined });
+
 // jsdom doesn't implement scrollIntoView (used by ChatConversationPage to auto-scroll to the latest message).
 if (!Element.prototype.scrollIntoView) {
   Element.prototype.scrollIntoView = () => {};

@@ -7,12 +7,14 @@ import { errorHandler, notFoundHandler } from "./middleware/errorHandler";
 import { apiRateLimiter } from "./middleware/rateLimiter";
 import { aiRouter } from "./modules/ai/ai.routes";
 import { createAuthRouter } from "./modules/auth/auth.routes";
+import { createCallsRouter } from "./modules/calls/calls.routes";
 import { createConversationsRouter } from "./modules/conversations/conversations.routes";
 import { createGroupsRouter } from "./modules/groups/groups.routes";
 import { createMediaRouter } from "./modules/media/media.routes";
 import { createMessagesRouter } from "./modules/messages/messages.routes";
 import { notificationsRouter } from "./modules/notifications/notifications.routes";
 import { privacyRouter } from "./modules/privacy/privacy.routes";
+import { createStatusesRouter } from "./modules/statuses/statuses.routes";
 import { createUsersRouter } from "./modules/users/users.routes";
 
 export interface AppInstance {
@@ -45,6 +47,8 @@ export function createApp(overrides: ContainerOverrides = {}): AppInstance {
   apiV1.use("/messages", createMessagesRouter(container.messagesService, container.conversationsService));
   apiV1.use("/groups", createGroupsRouter(container.groupsService));
   apiV1.use("/media", createMediaRouter(container.mediaService, container.maxUploadBytes));
+  apiV1.use("/calls", createCallsRouter(container.callsService));
+  apiV1.use("/statuses", createStatusesRouter(container.statusesService));
   apiV1.use("/notifications", notificationsRouter);
   apiV1.use("/privacy", privacyRouter);
   apiV1.use("/ai", aiRouter);

@@ -1,9 +1,14 @@
 export type AttachmentKind = "image" | "video" | "audio" | "document" | "file";
 
+/** What an upload is for: a chat message (Phase 3) or a status (Phase 4). */
+export type AttachmentPurpose = "message" | "status";
+
 /** Attachment metadata as exposed to API clients. `storageKey` is deliberately never included. */
 export interface AttachmentDTO {
   id: string;
-  conversationId: string;
+  /** Set for message attachments; null for status media. */
+  conversationId: string | null;
+  purpose: AttachmentPurpose;
   messageId: string | null;
   uploaderId: string;
   kind: AttachmentKind;
@@ -23,6 +28,7 @@ export function toAttachmentDTO(record: AttachmentRecord): AttachmentDTO {
   return {
     id: record.id,
     conversationId: record.conversationId,
+    purpose: record.purpose,
     messageId: record.messageId,
     uploaderId: record.uploaderId,
     kind: record.kind,

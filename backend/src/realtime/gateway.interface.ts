@@ -9,10 +9,20 @@ import type { ServerEvent } from "./events";
 export interface RealtimeGateway {
   sendToUser(userId: string, event: ServerEvent): void;
   isUserOnline(userId: string): boolean;
+  /**
+   * Sends to one specific connection (browser tab/device) of a user —
+   * used for call signaling, which must reach only the device that
+   * actually joined the call. Returns false if that connection is gone.
+   */
+  sendToConnection(userId: string, connectionId: string, event: ServerEvent): boolean;
+  /** True if `connectionId` is a currently open connection belonging to `userId`. */
+  hasConnection(userId: string, connectionId: string): boolean;
 }
 
 /** Gateway that does nothing — used when no live WebSocket server is attached (e.g. plain HTTP-only tests). */
 export const noopRealtimeGateway: RealtimeGateway = {
   sendToUser: () => undefined,
   isUserOnline: () => false,
+  sendToConnection: () => false,
+  hasConnection: () => false,
 };

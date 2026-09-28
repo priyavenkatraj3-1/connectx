@@ -14,11 +14,22 @@ export interface StorageProvider {
   delete(storageKey: string): Promise<void>;
 }
 
-/** Storage keys are "<conversationId>/<attachmentId>" — two UUIDs, nothing user-controlled. */
-const STORAGE_KEY_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+/**
+ * Storage keys are server-generated, never user-controlled:
+ *   message attachments: "<conversationId>/<attachmentId>"
+ *   status media:        "statuses/<ownerId>/<attachmentId>"
+ */
+const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+const STORAGE_KEY_PATTERN = new RegExp(`^(statuses/)?${UUID}/${UUID}$`);
 
 export function buildStorageKey(conversationId: string, attachmentId: string): string {
   const key = `${conversationId}/${attachmentId}`.toLowerCase();
+  assertValidStorageKey(key);
+  return key;
+}
+
+export function buildStatusStorageKey(ownerId: string, attachmentId: string): string {
+  const key = `statuses/${ownerId}/${attachmentId}`.toLowerCase();
   assertValidStorageKey(key);
   return key;
 }

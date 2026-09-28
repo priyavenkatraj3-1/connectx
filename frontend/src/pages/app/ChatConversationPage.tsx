@@ -1,17 +1,22 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
+import { CallButtons } from "../../components/calls/CallButtons";
+import { CallHistoryItem } from "../../components/calls/CallHistoryItem";
 import { MessageBubble } from "../../components/chat/MessageBubble";
 import { MessageComposer, type MentionCandidate } from "../../components/chat/MessageComposer";
 import { ErrorState } from "../../components/common/ErrorState";
 import { LoadingState } from "../../components/common/LoadingState";
 import { GroupDetailsPanel } from "../../components/groups/GroupDetailsPanel";
 import { Avatar } from "../../components/ui/Avatar";
-import { BackIcon, InfoIcon } from "../../components/ui/icons";
+import { BackIcon, InfoIcon, PhoneIcon, VideoIcon } from "../../components/ui/icons";
 import { useAuth } from "../../context/AuthContext";
+import { useOptionalCalls } from "../../context/CallContext";
 import { useConversations } from "../../context/ConversationsContext";
 import { useRealtime } from "../../context/RealtimeContext";
+import { callService } from "../../services/callService";
 import { groupService } from "../../services/groupService";
 import { messageService } from "../../services/messageService";
+import { isLiveCall, type CallDTO, type CallHistoryEntryDTO } from "../../types/call";
 import type { GroupDetails } from "../../types/group";
 import type { MessageDTO } from "../../types/message";
 import { getConversationAvatarUrl, getConversationTitle } from "../../utils/conversationDisplay";
@@ -31,7 +36,11 @@ export function ChatConversationPage() {
   const [groupDetails, setGroupDetails] = useState<GroupDetails | null>(null);
   const [isGroupPanelOpen, setIsGroupPanelOpen] = useState(false);
   const [removedReason, setRemovedReason] = useState<"removed" | "left" | null>(null);
+  const [hasMoreHistory, setHasMoreHistory] = useState(false);
+  const [callHistory, setCallHistory] = useState<CallHistoryEntryDTO[]>([]);
+  const [activeGroupCall, setActiveGroupCall] = useState<CallDTO | null>(null);
   const scrollAnchorRef = useRef<HTMLDivElement>(null);
+  const calls = useOptionalCalls();
 
   const conversation = conversationId ? getConversation(conversationId) : undefined;
   const isGroup = conversation?.type === "group";
@@ -44,6 +53,8 @@ export function ChatConversationPage() {
     setRemovedReason(null);
     setIsGroupPanelOpen(false);
     setGroupDetails(null);
+    setCallHistory([]);
+    setActiveGroupCall(null);
   }, [conversationId]);
 
   useEffect(() => {
@@ -55,7 +66,10 @@ export function ChatConversationPage() {
     messageService
       .list(accessToken, conversationId)
       .then((page) => {
-        if (!cancelled) setMessages(page.items);
+        if (!cancelled) {
+          setMessages(page.items);
+          setHasMoreHistory(page.hasMore);
+        }
       })
       .catch((err) => {
         if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load messages");
@@ -82,11 +96,34 @@ export function ChatConversationPage() {
     void loadGroupDetails();
   }, [loadGroupDetails]);
 
+  // Call history is shown inline in the timeline. Only enabled inside the
+  // app shell (where calling exists); failures just mean no call entries.
+  const loadCalls = useCallback(async () => {
+    if (!accessToken || !conversationId || !calls) return;
+    try {
+      const history = await callService.history(accessToken, conversationId);
+      setCallHistory(history);
+      const live = history.find((entry) => entry.scope === "group" && isLiveCall(entry));
+      setActiveGroupCall(live ?? (isGroup ? await callService.active(accessToken, conversationId) : null));
+    } catch {
+      setCallHistory([]);
+    }
+  }, [accessToken, conversationId, calls !== undefined, isGroup]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    void loadCalls();
+  }, [loadCalls]);
+
   useEffect(() => {
     if (!conversationId) return;
 
     return subscribe((event) => {
-      if (event.type === "error" || event.conversationId !== conversationId) return;
+      if ("call" in event && event.call.conversationId === conversationId) {
+        // Any call lifecycle change in this conversation: refresh the inline history / "join" banner.
+        if (event.type !== "call:updated") void loadCalls();
+        return;
+      }
+      if (!("conversationId" in event) || event.conversationId !== conversationId) return;
 
       switch (event.type) {
         case "message:new":
@@ -138,7 +175,7 @@ export function ChatConversationPage() {
           break;
       }
     });
-  }, [subscribe, conversationId, user?.id, loadGroupDetails]);
+  }, [subscribe, conversationId, user?.id, loadGroupDetails, loadCalls]);
 
   // Mark newly-loaded/arrived messages as read while this conversation is open.
   useEffect(() => {
@@ -149,7 +186,7 @@ export function ChatConversationPage() {
 
   useEffect(() => {
     scrollAnchorRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages.length]);
+  }, [messages.length, callHistory.length]);
 
   const handleSent = useCallback((sent: MessageDTO) => {
     setMessages((prev) => (prev.some((m) => m.id === sent.id) ? prev : [...prev, sent]));
@@ -174,6 +211,18 @@ export function ChatConversationPage() {
     navigate("/app");
   }, [conversationId, removeConversation, navigate]);
 
+  // Messages and calls interleaved by time. While older messages remain
+  // unloaded, calls older than the oldest loaded message are held back too,
+  // so they don't appear out of place above the loaded history.
+  const timeline = useMemo(() => {
+    const oldestLoaded = hasMoreHistory && messages[0] ? new Date(messages[0].createdAt).getTime() : -Infinity;
+    const callItems = callHistory
+      .filter((entry) => !isLiveCall(entry) && new Date(entry.createdAt).getTime() >= oldestLoaded)
+      .map((entry) => ({ kind: "call" as const, at: new Date(entry.createdAt).getTime(), entry }));
+    const messageItems = messages.map((message) => ({ kind: "message" as const, at: new Date(message.createdAt).getTime(), message }));
+    return [...messageItems, ...callItems].sort((a, b) => a.at - b.at);
+  }, [messages, callHistory, hasMoreHistory]);
+
   if (conversationsLoading && !conversation) {
     return <LoadingState label="Loading conversation…" />;
   }
@@ -183,6 +232,8 @@ export function ChatConversationPage() {
     groupDetails?.members.filter((m) => m.userId !== user?.id).map((m) => ({ userId: m.userId, displayName: m.displayName })) ??
     [];
   const memberCount = groupDetails?.members.length ?? conversation?.group?.memberCount;
+  const amInActiveGroupCall =
+    !!activeGroupCall && activeGroupCall.participants.some((p) => p.userId === user?.id && p.state === "joined");
 
   return (
     <div className="flex flex-1 overflow-hidden">
@@ -207,6 +258,9 @@ export function ChatConversationPage() {
               <p className="truncate text-xs text-slate-400">{conversation.otherParticipant.statusMessage}</p>
             )}
           </div>
+          {calls && conversationId && !removedReason && (conversation?.type === "direct" || conversation?.type === "group") && (
+            <CallButtons conversationId={conversationId} disabled={!!activeGroupCall} />
+          )}
           {isGroup && groupDetails && !removedReason && (
             <button
               type="button"
@@ -220,11 +274,29 @@ export function ChatConversationPage() {
           )}
         </header>
 
+        {calls && activeGroupCall && !amInActiveGroupCall && !removedReason && (
+          <div className="flex items-center gap-3 border-b border-emerald-200 bg-emerald-50 px-5 py-2 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
+            {activeGroupCall.media === "video" ? <VideoIcon width={16} height={16} /> : <PhoneIcon width={16} height={16} />}
+            <span className="flex-1">
+              {activeGroupCall.media === "video" ? "Video" : "Voice"} call in progress ·{" "}
+              {activeGroupCall.participants.filter((p) => p.state === "joined").length} joined
+            </span>
+            <button
+              type="button"
+              onClick={() => void calls.joinCall(activeGroupCall)}
+              disabled={calls.isBusy}
+              className="rounded-lg bg-emerald-600 px-3 py-1 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+            >
+              Join
+            </button>
+          </div>
+        )}
+
         <div className="flex flex-1 flex-col overflow-y-auto px-5 py-4">
           {isLoading && <LoadingState label="Loading messages…" />}
           {!isLoading && error && <ErrorState message={error} />}
 
-          {!isLoading && !error && messages.length === 0 && (
+          {!isLoading && !error && timeline.length === 0 && (
             <div className="flex flex-1 items-center justify-center text-sm text-slate-400">
               {isGroup ? "No messages yet. Start the conversation!" : "No messages yet. Say hello!"}
             </div>
@@ -232,11 +304,14 @@ export function ChatConversationPage() {
 
           {!isLoading &&
             !error &&
-            messages.map((message) => (
-              <MessageBubble
-                key={message.id}
-                message={message}
-                isOwn={message.senderId === user?.id}
+            timeline.map((item) =>
+              item.kind === "call" ? (
+                <CallHistoryItem key={`call-${item.entry.id}`} entry={item.entry} />
+              ) : (
+                <MessageBubble
+                key={item.message.id}
+                message={item.message}
+                isOwn={item.message.senderId === user?.id}
                 showSenderName={isGroup}
                 currentUserId={user?.id}
                 onReply={(m) => {
@@ -249,7 +324,8 @@ export function ChatConversationPage() {
                 }}
                 onDelete={handleDelete}
               />
-            ))}
+              )
+            )}
           <div ref={scrollAnchorRef} />
         </div>
 

@@ -5,7 +5,7 @@ status/stories, voice/video, and privacy-conscious, opt-in AI features —
 built with its own visual identity and architecture (not a clone of any
 existing product).
 
-**This repository is at Phase 3: Groups & Media Foundation.** See [docs/development-phases.md](docs/development-phases.md)
+**This repository is at Phase 4: Calls & Status.** See [docs/development-phases.md](docs/development-phases.md)
 for the full roadmap and what's planned next.
 
 ## Project vision
@@ -53,19 +53,21 @@ backend/src/
 ├── middleware/    auth guard, conversation-membership guard, error handling,
 │                  rate limiting, validation
 ├── db/            PostgreSQL connection pool + migration runner
-├── realtime/      WebSocket gateway, connection registry, event types, broadcast
+├── realtime/      WebSocket gateway, connection registry, event types (+ validated
+│                  client events), broadcast, gateway → service wiring
 ├── container.ts   dependency-injection wiring (repositories -> services -> routers)
 ├── modules/       one folder per domain (auth, users, conversations, messages,
-│                  groups, media (+ storage/), notifications, ai, privacy)
+│                  groups, media (+ storage/), calls, statuses, notifications, ai, privacy)
 └── server.ts, app.ts
 
 frontend/src/
-├── components/    ui/, layout/, chat/, groups/, media/, common/
+├── components/    ui/, layout/, chat/, groups/, media/, calls/, status/, common/
 ├── pages/         Landing, Login, Signup, and authenticated app/ views
-├── context/       AuthContext, RealtimeContext, ConversationsContext
+├── context/       AuthContext, RealtimeContext, ConversationsContext, CallContext
+├── lib/webrtc/    PeerMesh (RTCPeerConnection per peer), friendly media errors
 ├── routes/        ProtectedRoute
 ├── services/      API client + per-domain service wrappers (auth, users, conversations,
-│                  messages, groups, media)
+│                  messages, groups, media, calls, statuses)
 ├── hooks/, utils/
 └── types/
 ```
@@ -106,6 +108,12 @@ in-memory fallback for production use. You need:
    `002_groups_media.sql`, which is purely additive (new columns, indexes
    and the `message_mentions` table) — no existing rows are changed.
 
+   **Upgrading a Phase 3 database to Phase 4:** same command; it applies
+   `003_calls_status.sql` — new call and status tables, plus an
+   `attachments.purpose` column (existing rows default to `message`). The
+   only non-additive step re-creates the Phase 1 placeholder `statuses`
+   table, which no earlier code ever wrote to.
+
 If `DATABASE_URL` is missing or unreachable, `npm run dev:backend` /
 `npm start` fails immediately with a message telling you exactly what to
 configure, rather than starting in a broken state.
@@ -131,7 +139,8 @@ TEST_DATABASE_URL=postgresql://connectx:connectx@localhost:5432/connectx_dev npx
 
 Uploaded files are stored on local disk under `UPLOAD_DIR` (default
 `backend/uploads/`, gitignored), as `<conversationId>/<attachmentId>`
-files; metadata lives in the `attachments` table. The storage layer sits
+files (status media: `statuses/<ownerId>/<attachmentId>`); metadata lives
+in the `attachments` table. The storage layer sits
 behind a `StorageProvider` interface so it can be replaced with S3/object
 storage later. Back this directory up together with the database —
 deleting it breaks existing attachments.
@@ -150,6 +159,10 @@ ones:
 | `BCRYPT_SALT_ROUNDS` | Password hashing cost factor (default `12`) |
 | `MAX_UPLOAD_SIZE_MB` | Upload size limit (default `25`) |
 | `UPLOAD_DIR` | Local media storage directory (default `uploads`, relative to `backend/`) |
+| `WEBRTC_STUN_URLS` / `WEBRTC_TURN_URLS` | ICE servers for calls — **empty by default** (same machine/LAN only). See [docs/calls.md](docs/calls.md#stun--turn) |
+| `WEBRTC_TURN_SECRET` (+ `WEBRTC_TURN_TTL_SECONDS`) | Recommended TURN auth: short-lived per-user credentials (coturn `use-auth-secret`) |
+| `WEBRTC_TURN_USERNAME` / `WEBRTC_TURN_CREDENTIAL` | Alternative static TURN credentials |
+| `CALL_RING_TIMEOUT_SECONDS` | How long a call rings before it's missed (default `45`) |
 | `AI_PROVIDER` | AI provider selector; `none` until the AI phase |
 
 The frontend reads `VITE_API_BASE_URL` (defaults to
@@ -179,6 +192,39 @@ npm run build
 ```
 
 ## Currently implemented features
+
+### Phase 4 — Calls & status
+
+- **1:1 voice and video calls** over WebRTC, signaled through the existing
+  authenticated WebSocket: start from a direct chat, incoming-call banner
+  (accept/decline), "Calling…/Ringing…", cancel, end, mute, camera on/off,
+  local preview + remote video, live timer, reconnecting/failure states
+  with **Call again**, friendly permission/device/browser errors (camera
+  missing → audio-only fallback). Media never touches the server.
+- **Group call foundation** — start from a group, every member is invited,
+  join/leave/decline, join a call already in progress, participant tiles
+  and mute indicators. Peer-to-peer **mesh, capped at 8** — a foundation
+  for a future media server, not a large-meeting system.
+- **Call lifecycle on the server**: `ringing → accepted → connecting →
+  connected → ended`, plus `declined`, `cancelled`, `missed` (45s ring
+  timeout), `failed`; one live call per conversation; busy detection;
+  signaling bound to the specific device that joined; 10s reconnect grace;
+  stale calls failed on restart. Only metadata is stored.
+- **Call history** inline in each chat ("Missed voice call", "Outgoing
+  video call · 3:05"), visible only to the call's participants.
+- **STUN/TURN configuration** from environment variables, including
+  short-lived per-user TURN credentials. No credentials hard-coded.
+- **Status / stories** — text (with background colors), photo and video
+  statuses with captions; 24h expiry decided and enforced by the backend;
+  grouped feed (recent vs viewed), full-screen viewer with progress,
+  next/previous, auto-advance; delete your own; **seen-by list (owner
+  only)**; realtime new/deleted/expired/viewed updates.
+- **Status privacy** — My contacts / My contacts except… / Only share
+  with… / Everyone I chat with, per status or as a saved default, always
+  shown in the UI and **enforced by the server** (feed, direct lookup,
+  media downloads and realtime events).
+
+Details: [docs/calls.md](docs/calls.md), [docs/status.md](docs/status.md).
 
 ### Phase 3 — Groups & media foundation
 
@@ -220,9 +266,37 @@ npm run build
 See [docs/api.md](docs/api.md) for every endpoint and event, and
 [docs/security.md](docs/security.md) for what's covered.
 
-## Known limitations (Phase 3)
+## Known limitations (Phase 4)
 
-What this phase does **not** do:
+Calls and status:
+
+- **Real audio/video is not covered by automated tests** — Node/jsdom have
+  no WebRTC; the call UI and signaling are tested against fake
+  `RTCPeerConnection`/`getUserMedia`, and the server side over real
+  WebSockets. Verify media with
+  [docs/manual-testing-phase4.md](docs/manual-testing-phase4.md).
+- **Calls across the internet need STUN, and restrictive networks need
+  TURN.** With the default (no ICE servers) calls only work on the same
+  machine/LAN. ConnectX does not claim calls will connect everywhere
+  without a validated TURN deployment. Camera/mic also require HTTPS
+  outside `localhost`.
+- **Group calls are a peer-to-peer mesh** (max 8 joined; realistically
+  3–4): no SFU/media server, no active-speaker detection, no screen
+  sharing, no device picker.
+- **Single backend instance** — call device bindings and timers are in
+  memory (like the WebSocket registry); horizontal scaling needs shared
+  state.
+- **No push notifications**: incoming calls ring only while ConnectX is
+  open; no call waiting (a busy user's incoming calls ring out as missed).
+- **No end-to-end encryption claim** for calls. WebRTC encrypts media in
+  transit (DTLS-SRTP), but signaling goes through the server and there's no
+  key verification. Peer-to-peer calls can reveal participants' IP
+  addresses to each other.
+- Status: no replies/reactions/muting; privacy can't be edited after
+  posting; being added to a group grants `everyone`-level visibility
+  without consent; media isn't re-encoded (EXIF preserved).
+
+Carried over from Phase 3:
 
 - **No malware scanning** of uploads — only format validation (extension +
   magic bytes). No thumbnails, image re-encoding/EXIF stripping, or video
@@ -240,17 +314,18 @@ What this phase does **not** do:
   older messages delivered; reading them still marks them read.
 - **Deleted messages** simply disappear from the thread (replies to them do
   show "Original message was deleted").
-- **Mentions** create no notifications (notifications are Phase 4).
+- **Mentions** create no notifications (notifications aren't built yet).
 - **No end-to-end encryption** for any content, including media.
-- The group/media UI is verified by component tests plus an API/WebSocket
-  smoke test against the real server — **not** by an automated browser
-  run. Use the manual test script below.
+- The UI is verified by component tests plus API/WebSocket tests — **not**
+  by an automated browser run. Use the manual test scripts
+  ([Phase 3](docs/manual-testing-phase3.md), [Phase 4](docs/manual-testing-phase4.md)).
 
 ## What's only scaffolded
 
-Notifications, privacy settings persistence, and all AI features remain
-typed interfaces and route shapes only — routes honestly respond `501`,
-not fake data. Calls, status/stories and communities aren't started. See
+Notifications, general privacy settings persistence (`/privacy`), and all
+AI features remain typed interfaces and route shapes only — routes
+honestly respond `501`, not fake data. (Status privacy *is* implemented,
+under `/statuses/privacy`.) Communities aren't started. See
 [docs/development-phases.md](docs/development-phases.md) for when each
 lands.
 
@@ -272,16 +347,18 @@ place today.
 
 - Phase 2 (two users, direct chat): [docs/manual-testing-phase2.md](docs/manual-testing-phase2.md)
 - Phase 3 (three users, groups, roles, media): [docs/manual-testing-phase3.md](docs/manual-testing-phase3.md)
+- Phase 4 (two browser sessions, voice/video calls, status, privacy, expiry): [docs/manual-testing-phase4.md](docs/manual-testing-phase4.md)
 
 ## Planned phases
 
 1. **Foundation** ✅ — structure, auth, UI shell, schema design
 2. **Authentication & Real-time Direct Messaging** ✅ — persistent auth,
    profiles, search, 1:1 conversations, real-time messages, receipts
-3. **Groups & Media Foundation** ✅ (this phase) — group chat, roles,
+3. **Groups & Media Foundation** ✅ — group chat, roles,
    replies/mentions/edit/delete, validated media uploads
-4. **Calls, Status & Notifications** — voice/video calls, screen sharing,
-   status/stories, push notifications, communities, media follow-ups
+4. **Calls & Status** ✅ (this phase) — WebRTC voice/video calls, group
+   call foundation, call history, status/stories with server-enforced
+   privacy and expiry
 5. **AI Features** — a real AI provider wired into every interface
 6. **Multi-device, Scale & Productivity** — session management,
    mobile/desktop clients, scaling, productivity tools

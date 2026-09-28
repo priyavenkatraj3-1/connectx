@@ -4,8 +4,19 @@ import type { ConversationsRepository } from "../conversations/conversations.rep
 import type { MessagesRepository } from "../messages/messages.repository";
 import { validateUploadedFile } from "./file-validation";
 import type { MediaRepository } from "./media.repository";
-import { toAttachmentDTO, type AttachmentDTO, type AttachmentRecord } from "./media.types";
-import { buildStorageKey, type StorageProvider } from "./storage/storage-provider.interface";
+import { toAttachmentDTO, type AttachmentDTO, type AttachmentPurpose, type AttachmentRecord } from "./media.types";
+import { buildStatusStorageKey, buildStorageKey, type StorageProvider } from "./storage/storage-provider.interface";
+
+/**
+ * How MediaService learns whether a viewer may see status media, without
+ * depending on the statuses module (implemented by StatusesRepository).
+ */
+export interface StatusMediaAccess {
+  /** The status that uses this attachment, or null if it hasn't been published yet. */
+  findStatusIdByAttachment(attachmentId: string): Promise<string | null>;
+  /** Applies the status' privacy setting and expiry. */
+  isVisibleTo(statusId: string, viewerId: string): Promise<boolean>;
+}
 
 /**
  * Media foundation. Upload flow:
@@ -15,11 +26,16 @@ import { buildStorageKey, type StorageProvider } from "./storage/storage-provide
  *      attachment is linked to the new message and becomes visible to
  *      conversation members.
  *
- * Access rules for reading an attachment (metadata or bytes):
+ * Access rules for reading a message attachment (metadata or bytes):
  *   * the requester must be an active member of the attachment's conversation;
  *   * unattached: only the uploader;
  *   * attached: the message must not be deleted and must have been sent
  *     after the requester joined (same visibility as the message itself).
+ *
+ * Status media (Phase 4, purpose = "status") goes through the same upload
+ * validation and storage, but has no conversation. It is readable by its
+ * uploader, and — once published as a status — by exactly the viewers that
+ * status' privacy setting allows, until it expires.
  */
 export class MediaService {
   constructor(
@@ -27,19 +43,25 @@ export class MediaService {
     private readonly conversationsRepository: ConversationsRepository,
     private readonly messagesRepository: MessagesRepository,
     private readonly storage: StorageProvider,
-    private readonly maxUploadBytes: number
+    private readonly maxUploadBytes: number,
+    private readonly statusMediaAccess: StatusMediaAccess
   ) {}
 
   async upload(input: {
     uploaderId: string;
-    conversationId: string;
+    purpose?: AttachmentPurpose;
+    conversationId?: string;
     originalName: string;
     declaredMimeType?: string;
     data: Buffer;
   }): Promise<AttachmentDTO> {
-    const isMember = await this.conversationsRepository.isMember(input.conversationId, input.uploaderId);
-    if (!isMember) {
-      throw new AppError("You do not have access to this conversation", 403);
+    const purpose = input.purpose ?? "message";
+    if (purpose === "message") {
+      if (!input.conversationId) throw new AppError("conversationId is required", 400);
+      const isMember = await this.conversationsRepository.isMember(input.conversationId, input.uploaderId);
+      if (!isMember) {
+        throw new AppError("You do not have access to this conversation", 403);
+      }
     }
 
     const validation = validateUploadedFile(
@@ -49,15 +71,21 @@ export class MediaService {
     if (!validation.ok) {
       throw new AppError(validation.reason, validation.statusCode);
     }
+    if (purpose === "status" && validation.kind !== "image" && validation.kind !== "video") {
+      throw new AppError("A status can only be a photo or a video", 415);
+    }
 
     const id = generateId();
-    const storageKey = buildStorageKey(input.conversationId, id);
+    const conversationId = purpose === "message" ? input.conversationId! : null;
+    const storageKey =
+      purpose === "message" ? buildStorageKey(conversationId!, id) : buildStatusStorageKey(input.uploaderId, id);
     await this.storage.save(storageKey, input.data);
 
     try {
       const record = await this.mediaRepository.insert({
         id,
-        conversationId: input.conversationId,
+        conversationId,
+        purpose,
         uploaderId: input.uploaderId,
         storageKey,
         originalFilename: validation.fileName,
@@ -77,7 +105,17 @@ export class MediaService {
     const attachment = await this.mediaRepository.findById(attachmentId);
     if (!attachment) throw new AppError("Attachment not found", 404);
 
-    const membership = await this.conversationsRepository.getActiveMembership(attachment.conversationId, userId);
+    if (attachment.purpose === "status") {
+      if (attachment.uploaderId === userId) return attachment;
+      const statusId = await this.statusMediaAccess.findStatusIdByAttachment(attachment.id);
+      // Same 404 whether unpublished, expired or hidden by privacy — never confirm the file exists.
+      if (!statusId || !(await this.statusMediaAccess.isVisibleTo(statusId, userId))) {
+        throw new AppError("Attachment not found", 404);
+      }
+      return attachment;
+    }
+
+    const membership = await this.conversationsRepository.getActiveMembership(attachment.conversationId!, userId);
     if (!membership) throw new AppError("You do not have access to this attachment", 403);
 
     if (attachment.messageId === null) {
@@ -117,6 +155,9 @@ export class MediaService {
     }
     if (attachment.messageId !== null) {
       throw new AppError("This attachment has been sent; delete the message instead", 409);
+    }
+    if (attachment.purpose === "status" && (await this.statusMediaAccess.findStatusIdByAttachment(attachment.id))) {
+      throw new AppError("This media is part of a published status; delete the status instead", 409);
     }
 
     await this.mediaRepository.deleteById(attachmentId);

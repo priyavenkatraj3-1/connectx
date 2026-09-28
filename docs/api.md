@@ -20,8 +20,8 @@ Status codes used consistently across modules: `400` validation failure
 (including malformed IDs in the URL), `401` missing/invalid token, `403`
 authenticated but not allowed (not a member, wrong role, not the author),
 `404` resource doesn't exist, `409` conflict (duplicate membership,
-attachment already sent), `413` file too large, `415` unsupported/spoofed
-file type.
+attachment already sent, call already in progress / user busy), `413` file
+too large, `415` unsupported/spoofed file type.
 
 ## Health
 
@@ -312,7 +312,10 @@ message** with `attachmentId` (makes it visible to the conversation).
 
 ```ts
 interface AttachmentDTO {
-  id: string; conversationId: string; messageId: string | null; uploaderId: string;
+  id: string;
+  conversationId: string | null;          // null for status media (Phase 4)
+  purpose: "message" | "status";          // Phase 4
+  messageId: string | null; uploaderId: string;
   kind: "image" | "video" | "audio" | "document" | "file";
   mimeType: string; sizeBytes: number; originalFilename: string; createdAt: string;
 }
@@ -321,6 +324,13 @@ interface AttachmentDTO {
 The server-side storage key is never exposed.
 
 ### `POST /api/v1/media?conversationId=<id>&filename=<name>[&mimeType=<type>]`
+### `POST /api/v1/media?purpose=status&filename=<name>[&mimeType=<type>]` (Phase 4)
+
+`purpose=status` uploads **status media**: no `conversationId` (sending
+one is a `400`), same validation below, and only images/videos are
+accepted (`415`). The result can only be used by publishing it with
+`POST /statuses`; until then only the uploader can read it, afterwards
+exactly the viewers the status' privacy allows (everyone else gets `404`).
 
 Body: the raw file bytes, `Content-Type: application/octet-stream` (no
 multipart). Requires membership of `conversationId` (`403`). Validation:
@@ -363,12 +373,153 @@ message was deleted).
 Uploader only (`403`), and only while unsent (`409` — delete the message
 instead). Removes metadata and stored bytes. Returns `204`.
 
+## Calls — `modules/calls` (Phase 4)
+
+Architecture, lifecycle and STUN/TURN: [calls.md](./calls.md). REST
+starts calls and serves lookups/history; everything after the start is
+WebSocket (see Realtime below).
+
+```ts
+interface CallDTO {
+  id: string; conversationId: string;
+  scope: "direct" | "group"; media: "voice" | "video";
+  state: "ringing" | "accepted" | "connecting" | "connected" | "declined" | "missed" | "ended" | "failed" | "cancelled";
+  endReason: "hangup" | "declined" | "no_answer" | "cancelled" | "connection_failed" | "media_error"
+           | "disconnected" | "all_left" | "server_restart" | null;
+  initiatorId: string; createdAt: string; answeredAt: string | null; connectedAt: string | null;
+  endedAt: string | null; durationSeconds: number | null;  // from media connected → end
+  participants: Array<{
+    userId: string; displayName: string; avatarUrl: string | null;
+    role: "initiator" | "invitee";
+    state: "invited" | "ringing" | "joined" | "declined" | "missed" | "left";
+    joinedAt: string | null; leftAt: string | null;
+    audioEnabled: boolean | null; videoEnabled: boolean | null;  // live calls only
+  }>;
+}
+interface CallHistoryEntryDTO extends CallDTO {
+  direction: "incoming" | "outgoing";
+  outcome: "ongoing" | "completed" | "missed" | "declined" | "cancelled" | "no_answer" | "failed";
+}
+```
+
+### `POST /api/v1/calls`
+
+Body `{ conversationId, media: "voice" | "video", connectionId }` —
+`connectionId` is the `cid` this tab connected to the WebSocket with; it
+must be one of the caller's **own open** connections (`409` otherwise).
+Checks: caller is an active member (`403`); someone else is in the
+conversation (`400`); caller not already in a call (`409`); direct callee
+not in another call (`409 "<name> is on another call"`); no live call in
+this conversation (`409` — for a group, join the existing one instead).
+Every other member gets `call:invite`. Returns `201 { call }` (state
+`ringing`).
+
+### `GET /api/v1/calls?conversationId=<id>&limit=<1-100>&before=<callId>`
+
+Call history, newest first: only calls the requester was invited to or
+started. With `conversationId`, the requester must be an active member
+(`403`). Returns `{ calls: CallHistoryEntryDTO[] }`.
+
+### `GET /api/v1/calls/active?conversationId=<id>`
+
+The live call in a conversation, or `{ call: null }`. Members only (`403`).
+
+### `GET /api/v1/calls/:callId`
+
+`{ call }` for participants — and, for a *live group* call, any active
+group member (so they can join). Otherwise `403`; unknown `404`.
+
+### `POST /api/v1/calls/:callId/end`
+
+Hang up over REST (fallback when the socket is down): cancels (caller,
+still ringing), declines (invitee, still ringing), ends (direct, in
+progress) or leaves (group). Participants only (`403`). Idempotent on an
+already-finished call. Returns `{ call }`.
+
+### `GET /api/v1/calls/ice-servers`
+
+`{ iceServers: Array<{ urls: string[]; username?: string; credential?: string }> }`
+from `WEBRTC_*` settings — empty unless configured. With
+`WEBRTC_TURN_SECRET`, TURN credentials are per-user and time-limited.
+Sent with `Cache-Control: private, no-store`.
+
+## Status — `modules/statuses` (Phase 4)
+
+Rules and privacy model: [status.md](./status.md). Invisible, expired and
+nonexistent statuses all return `404`.
+
+```ts
+interface StatusDTO {
+  id: string; userId: string; type: "text" | "image" | "video";
+  text: string | null;                       // text, or caption
+  backgroundColor: "indigo" | "rose" | "emerald" | "amber" | "slate" | "violet" | null;
+  media: { attachmentId: string; kind: "image" | "video"; mimeType: string; sizeBytes: number } | null;
+  createdAt: string; expiresAt: string;      // expiresAt = createdAt + 24h, set by the server
+  viewedByMe: boolean;
+}
+interface OwnStatusDTO extends StatusDTO {   // only ever returned to the owner
+  visibility: "everyone" | "contacts" | "selected" | "except";
+  audienceUserIds: string[]; viewCount: number;
+}
+```
+
+### `GET /api/v1/statuses`
+
+`{ mine: OwnStatusDTO[], feed: Array<{ user: PublicProfile, statuses: StatusDTO[], hasUnseen: boolean, latestAt: string }> }`
+— your active statuses, plus every active status you may see, grouped by
+person (unseen first, then most recent).
+
+### `POST /api/v1/statuses`
+
+Body `{ type, text?, backgroundColor?, attachmentId?, privacy? }`:
+
+- `text`: required for `text` statuses (≤700 chars), optional caption
+  otherwise; `backgroundColor` only for text;
+- `attachmentId`: required for `image`/`video` — an upload of yours made
+  with `purpose=status` (`404` if not yours, `400` if a chat attachment or
+  the wrong kind, `409` if already used);
+- `privacy`: `{ visibility, userIds? }` (`userIds` = allow-list for
+  `selected`, deny-list for `except`; ≤256 existing users, else `400`;
+  `selected` needs at least one). Omitted: your saved default.
+
+Any `expiresAt` in the body is ignored. Returns `201 { status: OwnStatusDTO }`
+and sends `status:created` to you and the allowed audience.
+
+### `GET /api/v1/statuses/:statusId`
+
+`{ status }` (an `OwnStatusDTO` if it's yours). `404` unless visible to you.
+
+### `POST /api/v1/statuses/:statusId/view`
+
+Records your view once (no-op for your own). `404` unless visible.
+Returns `{ viewedAt }`; the owner gets `status:viewed` on the first view.
+
+### `GET /api/v1/statuses/:statusId/viewers`
+
+Owner only: `{ viewers: Array<{ userId, displayName, avatarUrl, viewedAt }> }`.
+`403` for a viewer who can see the status, `404` for anyone else.
+
+### `DELETE /api/v1/statuses/:statusId`
+
+Owner only (`403` if you can see but don't own it, `404` otherwise).
+Deletes the status, its views and its media. `204`; sends `status:deleted`.
+
+### `GET /api/v1/statuses/privacy` · `PUT /api/v1/statuses/privacy`
+
+Your default privacy for new statuses: `{ privacy: { visibility, userIds } }`
+(default `contacts`). `PUT` body `{ visibility, userIds? }` — de-duplicated,
+yourself removed, unknown users `400`.
+
 ## Realtime — WebSocket gateway (`backend/src/realtime`)
 
-Connect to `ws://<host>/ws?token=<accessToken>` (the access token is
-passed as a query parameter because browsers' native WebSocket API cannot
-set custom headers). An invalid/missing token is rejected during the HTTP
-Upgrade handshake with a `401` — the socket never opens.
+Connect to `ws://<host>/ws?token=<accessToken>[&cid=<uuid>]` (the access
+token is passed as a query parameter because browsers' native WebSocket
+API cannot set custom headers). An invalid/missing token is rejected
+during the HTTP Upgrade handshake with a `401` — the socket never opens.
+`cid` (Phase 4) is a per-tab connection ID the client generates and keeps
+across reconnects; calls are bound to it (see [calls.md](./calls.md)).
+Inbound frames over 128KB close the connection; every client event is
+schema-validated before use.
 
 Events are only ever sent to users entitled to them: active members of the
 conversation, plus the affected user for removals/leaves.
@@ -391,6 +542,12 @@ conversation, plus the affected user for removals/leaves.
 | `group:member_removed` | `{ conversationId, groupId, userId, removedBy }` | **Phase 3** |
 | `group:member_left` | `{ conversationId, groupId, userId, newOwnerId }` | **Phase 3** |
 | `group:role_changed` | `{ conversationId, groupId, userId, role, changedBy }` | **Phase 3** |
+| `call:invite` · `call:ring` · `call:accept` · `call:decline` · `call:cancel` · `call:end` · `call:failed` · `call:participant_left` · `call:updated` | `{ call: CallDTO, … }` (see [calls.md](./calls.md#server--client)) | **Phase 4**: call lifecycle, to the call's participants |
+| `call:offer` · `call:answer` · `call:ice_candidate` | `{ callId, fromUserId, sdp \| candidate }` | **Phase 4**: signaling relay — only to the target's joined connection |
+| `call:error` | `{ callId, message }` | **Phase 4**: your call event was malformed, unauthorized or invalid for the call's state |
+| `status:created` · `status:deleted` | `{ statusId, userId }` | **Phase 4**: to the owner and allowed viewers |
+| `status:expired` | `{ statusIds, userId }` | **Phase 4**: from the expiry sweep, to the owner and allowed viewers |
+| `status:viewed` | `{ statusId, viewer, viewedAt, viewCount }` | **Phase 4**: owner only |
 | `error` | `{ message }` | The server couldn't process (or refused) your last client event |
 
 **Client → server events** (`ClientEvent`):
@@ -399,6 +556,11 @@ conversation, plus the affected user for removals/leaves.
 |---|---|---|
 | `message:read` | `{ conversationId, upToMessageId }` | Same as `POST /messages/:conversationId/read`, including the membership check (a non-member gets an `error` event and nothing is written) |
 | `ping` | — | No-op; the open connection itself is the liveness signal |
+| `call:ring` · `call:accept` · `call:decline` · `call:cancel` · `call:end` · `call:connected` | `{ callId }` | **Phase 4** call lifecycle — see [calls.md](./calls.md#client--server) for who may send each |
+| `call:offer` · `call:answer` | `{ callId, toUserId, sdp }` | **Phase 4**: relayed to `toUserId`'s joined device (sender must be joined, from its bound connection) |
+| `call:ice_candidate` | `{ callId, toUserId, candidate: { candidate, sdpMid?, sdpMLineIndex?, usernameFragment? } }` | **Phase 4**: as above |
+| `call:failed` | `{ callId, reason: "connection_failed" \| "media_error" }` | **Phase 4**: ends a direct call as `failed`; a group participant leaves |
+| `call:media_state` | `{ callId, audioEnabled, videoEnabled }` | **Phase 4**: mic/camera indicator for other participants |
 
 ## Everything else — scaffolded, not implemented
 

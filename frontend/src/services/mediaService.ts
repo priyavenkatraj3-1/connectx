@@ -69,6 +69,51 @@ export interface UploadHandle {
   abort(): void;
 }
 
+/** Status media is limited to photos and videos (the server enforces the same rule). */
+export function precheckStatusFile(file: File): string | null {
+  const generic = precheckFile(file);
+  if (generic) return generic;
+  const kind = guessKind(file.name);
+  return kind === "image" || kind === "video" ? null : "A status can only be a photo or a video";
+}
+
+function uploadRaw(
+  accessToken: string,
+  query: Record<string, string | undefined>,
+  file: File,
+  onProgress?: (fraction: number) => void
+): UploadHandle {
+  const xhr = new XMLHttpRequest();
+
+  const promise = new Promise<AttachmentDTO>((resolve, reject) => {
+    xhr.open("POST", `${API_BASE_URL}/media${buildQueryString(query)}`);
+    xhr.setRequestHeader("Authorization", `Bearer ${accessToken}`);
+    xhr.setRequestHeader("Content-Type", "application/octet-stream");
+
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable && onProgress) onProgress(event.loaded / event.total);
+    };
+    xhr.onload = () => {
+      let data: { attachment?: AttachmentDTO; error?: { message?: string } } = {};
+      try {
+        data = JSON.parse(xhr.responseText) as typeof data;
+      } catch {
+        // Non-JSON error body; fall through to the generic message.
+      }
+      if (xhr.status >= 200 && xhr.status < 300 && data.attachment) {
+        resolve(data.attachment);
+      } else {
+        reject(new ApiError(data.error?.message ?? "Upload failed. Please try again.", xhr.status));
+      }
+    };
+    xhr.onerror = () => reject(new ApiError("Upload failed — check your connection and try again.", 0));
+    xhr.onabort = () => reject(new ApiError("Upload cancelled", 0));
+    xhr.send(file);
+  });
+
+  return { promise, abort: () => xhr.abort() };
+}
+
 export const mediaService = {
   /**
    * Uploads a file as the raw request body. Uses XMLHttpRequest (not
@@ -82,36 +127,16 @@ export const mediaService = {
     file: File,
     onProgress?: (fraction: number) => void
   ): UploadHandle {
-    const xhr = new XMLHttpRequest();
-    const query = buildQueryString({ conversationId, filename: file.name, mimeType: file.type || undefined });
+    return uploadRaw(accessToken, { conversationId, filename: file.name, mimeType: file.type || undefined }, file, onProgress);
+  },
 
-    const promise = new Promise<AttachmentDTO>((resolve, reject) => {
-      xhr.open("POST", `${API_BASE_URL}/media${query}`);
-      xhr.setRequestHeader("Authorization", `Bearer ${accessToken}`);
-      xhr.setRequestHeader("Content-Type", "application/octet-stream");
-
-      xhr.upload.onprogress = (event) => {
-        if (event.lengthComputable && onProgress) onProgress(event.loaded / event.total);
-      };
-      xhr.onload = () => {
-        let data: { attachment?: AttachmentDTO; error?: { message?: string } } = {};
-        try {
-          data = JSON.parse(xhr.responseText) as typeof data;
-        } catch {
-          // Non-JSON error body; fall through to the generic message.
-        }
-        if (xhr.status >= 200 && xhr.status < 300 && data.attachment) {
-          resolve(data.attachment);
-        } else {
-          reject(new ApiError(data.error?.message ?? "Upload failed. Please try again.", xhr.status));
-        }
-      };
-      xhr.onerror = () => reject(new ApiError("Upload failed — check your connection and try again.", 0));
-      xhr.onabort = () => reject(new ApiError("Upload cancelled", 0));
-      xhr.send(file);
-    });
-
-    return { promise, abort: () => xhr.abort() };
+  /**
+   * Uploads status media (Phase 4) through the same validated pipeline,
+   * with `purpose=status` instead of a conversation. The result can only
+   * be used by publishing it with statusService.create.
+   */
+  uploadStatusMedia(accessToken: string, file: File, onProgress?: (fraction: number) => void): UploadHandle {
+    return uploadRaw(accessToken, { purpose: "status", filename: file.name, mimeType: file.type || undefined }, file, onProgress);
   },
 
   /** Fetches attachment bytes with the access token (an <img src> can't send an Authorization header). */

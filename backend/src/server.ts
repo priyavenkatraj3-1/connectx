@@ -1,7 +1,10 @@
 import { createServer } from "http";
 import { createApp } from "./app";
 import { env } from "./config/env";
+import { buildGatewayOptions } from "./realtime/gateway-handlers";
 import { attachWebSocketGateway, WS_PATH } from "./realtime/ws.server";
+
+const STATUS_SWEEP_INTERVAL_MS = 60_000;
 
 async function main(): Promise<void> {
   const { app, container } = createApp();
@@ -29,13 +32,21 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // Calls still marked live from a previous run can't be signaled any more (that state lived in memory).
+  const staleCalls = await container.callsService.recoverStaleCalls();
+  if (staleCalls > 0) console.log(`Marked ${staleCalls} call(s) interrupted by the last shutdown as failed.`);
+
   const httpServer = createServer(app);
 
-  const realtimeGateway = attachWebSocketGateway(httpServer, {
-    onClientRead: (userId, conversationId, upToMessageId) =>
-      container.messagesService.markRead(conversationId, userId, upToMessageId),
-  });
+  const realtimeGateway = attachWebSocketGateway(httpServer, buildGatewayOptions(container));
   container.realtimeGatewayRef.current = realtimeGateway;
+
+  // Expired statuses are already hidden by every query; this sweep notifies
+  // open clients and deletes the expired rows and their media.
+  const sweepStatuses = () =>
+    void container.statusesService.sweepExpired().catch((err) => console.error("[status sweep failed]", err));
+  sweepStatuses();
+  setInterval(sweepStatuses, STATUS_SWEEP_INTERVAL_MS).unref();
 
   httpServer.listen(env.port, () => {
     console.log(`ConnectX backend listening on port ${env.port} [${env.nodeEnv}]`);

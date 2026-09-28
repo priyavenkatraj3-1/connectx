@@ -2,7 +2,7 @@ import type { Response } from "express";
 import { AppError } from "../../middleware/errorHandler";
 import type { AuthenticatedRequest } from "../../middleware/requireAuth";
 import type { MediaService } from "./media.service";
-import type { UploadQuery } from "./media.validation";
+import { uploadQuerySchema, type UploadQuery } from "./media.validation";
 
 /** Kinds a browser may render inline; everything else is forced to download. */
 const INLINE_KINDS = new Set(["image", "video", "audio"]);
@@ -23,10 +23,12 @@ export class MediaController {
     if (!Buffer.isBuffer(req.body)) {
       throw new AppError("Send the file as the raw request body (Content-Type: application/octet-stream)", 400);
     }
-    const { conversationId, filename, mimeType } = req.query as unknown as UploadQuery;
+    // Re-parse to apply defaults (validateQuery only checks; see middleware/validate.ts).
+    const { purpose, conversationId, filename, mimeType } = uploadQuerySchema.parse(req.query) as UploadQuery;
 
     const attachment = await this.mediaService.upload({
       uploaderId: req.user!.userId,
+      purpose,
       conversationId,
       originalName: filename,
       declaredMimeType: mimeType,

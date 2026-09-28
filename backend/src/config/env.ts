@@ -23,6 +23,32 @@ interface EnvConfig {
   maxUploadSizeMb: number;
   /** Root directory for the local-disk media storage provider (development storage; see modules/media/storage). */
   uploadDir: string;
+  /** WebRTC ICE servers handed to call clients — see modules/calls/ice-servers.ts and docs/calls.md. */
+  webrtc: {
+    stunUrls: string[];
+    turnUrls: string[];
+    /** Static TURN credentials (simple setups). Ignored when turnSecret is set. */
+    turnUsername: string | undefined;
+    turnCredential: string | undefined;
+    /** Shared secret for time-limited TURN credentials (coturn `use-auth-secret`). Preferred for production. */
+    turnSecret: string | undefined;
+    turnCredentialTtlSeconds: number;
+  };
+  calls: {
+    ringTimeoutMs: number;
+  };
+}
+
+function readList(name: string): string[] {
+  return (process.env[name] ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+function readOptional(name: string): string | undefined {
+  const value = process.env[name]?.trim();
+  return value ? value : undefined;
 }
 
 function readEnv(name: string, fallback?: string): string {
@@ -57,4 +83,18 @@ export const env: EnvConfig = {
   },
   maxUploadSizeMb: Number(process.env.MAX_UPLOAD_SIZE_MB ?? 25),
   uploadDir: process.env.UPLOAD_DIR ?? "uploads",
+  webrtc: {
+    // No default ICE servers: with none configured, calls work between
+    // browsers on the same machine/LAN (host candidates) and nothing is sent
+    // to a third-party STUN server unless you opt in. See .env.example.
+    stunUrls: readList("WEBRTC_STUN_URLS"),
+    turnUrls: readList("WEBRTC_TURN_URLS"),
+    turnUsername: readOptional("WEBRTC_TURN_USERNAME"),
+    turnCredential: readOptional("WEBRTC_TURN_CREDENTIAL"),
+    turnSecret: readOptional("WEBRTC_TURN_SECRET"),
+    turnCredentialTtlSeconds: Number(process.env.WEBRTC_TURN_TTL_SECONDS ?? 3600),
+  },
+  calls: {
+    ringTimeoutMs: Number(process.env.CALL_RING_TIMEOUT_SECONDS ?? 45) * 1000,
+  },
 };

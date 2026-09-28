@@ -206,3 +206,110 @@ export function InfoIcon(props: IconProps) {
     </svg>
   );
 }
+
+export function PhoneIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.8.7 2.7a2 2 0 0 1-.5 2.1L8 9.8a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.7.7a2 2 0 0 1 1.7 2Z" />
+    </svg>
+  );
+}
+
+export function PhoneOffIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M10.7 13.3a16 16 0 0 0 3.3 2.5l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.7.7a2 2 0 0 1 1.7 2v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.4 19.4 0 0 1-3.3-2.7M5.2 13.4A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.8.7 2.7a2 2 0 0 1-.5 2.1L8 9.8" />
+      <path d="M22 2 2 22" />
+    </svg>
+  );
+}
+
+export function VideoIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="m22 8-6 4 6 4V8Z" />
+      <rect x="2" y="6" width="14" height="12" rx="2" />
+    </svg>
+  );
+}
+
+export function VideoOffIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M10.7 6H14a2 2 0 0 1 2 2v3.3l1 1L22 8v8" />
+      <path d="M16 16a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h2" />
+      <path d="M2 2l20 20" />
+    </svg>
+  );
+}
+
+export function MicIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <rect x="9" y="2" width="6" height="12" rx="3" />
+      <path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4M8 22h8" />
+    </svg>
+  );
+}
+
+export function MicOffIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M2 2l20 20" />
+      <path d="M9 9v2a3 3 0 0 0 5.1 2.1M15 9.3V5a3 3 0 0 0-5.9-.6" />
+      <path d="M17 16.9A7 7 0 0 1 5 11v-1M19 10v1a7 7 0 0 1-.1 1.2M12 18v4M8 22h8" />
+    </svg>
+  );
+}
+
+export function ImageIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <circle cx="9" cy="9" r="2" />
+      <path d="m21 15-5-5L5 21" />
+    </svg>
+  );
+}
+
+export function TypeIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M4 7V4h16v3M9 20h6M12 4v16" />
+    </svg>
+  );
+}
+
+export function EyeIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
+export function LockIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <rect x="4" y="11" width="16" height="10" rx="2" />
+      <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+    </svg>
+  );
+}
+
+export function ChevronLeftIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="m15 18-6-6 6-6" />
+    </svg>
+  );
+}
+
+export function ChevronRightIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="m9 18 6-6-6-6" />
+    </svg>
+  );
+}

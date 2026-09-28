@@ -1,6 +1,8 @@
 import { env } from "./config/env";
 import { type DatabaseClient, getDb } from "./db/pool";
 import { AuthService } from "./modules/auth/auth.service";
+import { CallsRepository } from "./modules/calls/calls.repository";
+import { CallsService } from "./modules/calls/calls.service";
 import { PostgresUserRepository } from "./modules/auth/postgres-user.repository";
 import { ConversationsRepository } from "./modules/conversations/conversations.repository";
 import { ConversationsService } from "./modules/conversations/conversations.service";
@@ -12,6 +14,8 @@ import { LocalDiskStorageProvider } from "./modules/media/storage/local-disk.sto
 import type { StorageProvider } from "./modules/media/storage/storage-provider.interface";
 import { MessagesRepository } from "./modules/messages/messages.repository";
 import { MessagesService } from "./modules/messages/messages.service";
+import { StatusesRepository } from "./modules/statuses/statuses.repository";
+import { StatusesService } from "./modules/statuses/statuses.service";
 import { UsersRepository } from "./modules/users/users.repository";
 import { UsersService } from "./modules/users/users.service";
 import { noopRealtimeGateway, type RealtimeGateway } from "./realtime/gateway.interface";
@@ -23,6 +27,12 @@ export interface ContainerOverrides {
   storage?: StorageProvider;
   /** Upload size cap in bytes. Defaults to MAX_UPLOAD_SIZE_MB. */
   maxUploadBytes?: number;
+  /** Call ring timeout. Defaults to CALL_RING_TIMEOUT_SECONDS; tests shorten it. */
+  callRingTimeoutMs?: number;
+  /** How long a dropped connection may take to reconnect before its call participation ends. */
+  callReconnectGraceMs?: number;
+  /** Max joined participants in a (mesh) group call. Defaults to MAX_MESH_PARTICIPANTS. */
+  callMaxMeshParticipants?: number;
 }
 
 export interface Container {
@@ -37,6 +47,8 @@ export interface Container {
   messagesService: MessagesService;
   groupsService: GroupsService;
   mediaService: MediaService;
+  callsService: CallsService;
+  statusesService: StatusesService;
 }
 
 /**
@@ -55,6 +67,9 @@ export function createContainer(overrides: ContainerOverrides = {}): Container {
   const delegatingGateway: RealtimeGateway = {
     sendToUser: (userId, event) => realtimeGatewayRef.current.sendToUser(userId, event),
     isUserOnline: (userId) => realtimeGatewayRef.current.isUserOnline(userId),
+    sendToConnection: (userId, connectionId, event) =>
+      realtimeGatewayRef.current.sendToConnection(userId, connectionId, event),
+    hasConnection: (userId, connectionId) => realtimeGatewayRef.current.hasConnection(userId, connectionId),
   };
 
   const userRepository = new PostgresUserRepository(db);
@@ -79,12 +94,29 @@ export function createContainer(overrides: ContainerOverrides = {}): Container {
   const groupsRepository = new GroupsRepository(db);
   const groupsService = new GroupsService(groupsRepository, usersRepository, delegatingGateway);
 
+  const statusesRepository = new StatusesRepository(db);
+  const statusesService = new StatusesService(statusesRepository, mediaRepository, usersRepository, storage, delegatingGateway);
+
   const mediaService = new MediaService(
     mediaRepository,
     conversationsRepository,
     messagesRepository,
     storage,
-    maxUploadBytes
+    maxUploadBytes,
+    statusesRepository
+  );
+
+  const callsService = new CallsService(
+    new CallsRepository(db),
+    conversationsRepository,
+    usersRepository,
+    delegatingGateway,
+    {
+      ringTimeoutMs: overrides.callRingTimeoutMs ?? env.calls.ringTimeoutMs,
+      reconnectGraceMs: overrides.callReconnectGraceMs,
+      maxMeshParticipants: overrides.callMaxMeshParticipants,
+      iceServers: env.webrtc,
+    }
   );
 
   return {
@@ -98,5 +130,7 @@ export function createContainer(overrides: ContainerOverrides = {}): Container {
     messagesService,
     groupsService,
     mediaService,
+    callsService,
+    statusesService,
   };
 }
