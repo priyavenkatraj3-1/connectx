@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type RequestHandler } from "express";
 import { requireAuth } from "../../middleware/requireAuth";
 import { requireConversationMember, type MembershipChecker } from "../../middleware/requireConversationMember";
 import { validateBody, validateParams, validateQuery } from "../../middleware/validate";
@@ -6,6 +6,7 @@ import { asyncHandler } from "../../utils/asyncHandler";
 import { MessagesController } from "./messages.controller";
 import type { MessagesService } from "./messages.service";
 import {
+  conversationParamsSchema,
   editMessageSchema,
   listMessagesQuerySchema,
   markReadSchema,
@@ -13,14 +14,23 @@ import {
   sendMessageSchema,
 } from "./messages.validation";
 
-export function createMessagesRouter(messagesService: MessagesService, membershipChecker: MembershipChecker): Router {
+/** Default when no limiter is supplied (e.g. unit tests building a bare router). */
+const passThrough: RequestHandler = (_req, _res, next) => next();
+
+export function createMessagesRouter(
+  messagesService: MessagesService,
+  membershipChecker: MembershipChecker,
+  sendLimiter: RequestHandler = passThrough
+): Router {
   const controller = new MessagesController(messagesService);
   const router = Router();
   const guardMembership = asyncHandler(requireConversationMember(membershipChecker));
+  const conversationParams = validateParams(conversationParamsSchema);
 
   router.get(
     "/:conversationId",
     requireAuth,
+    conversationParams,
     guardMembership,
     validateQuery(listMessagesQuerySchema),
     asyncHandler(controller.list)
@@ -28,6 +38,8 @@ export function createMessagesRouter(messagesService: MessagesService, membershi
   router.post(
     "/:conversationId",
     requireAuth,
+    sendLimiter,
+    conversationParams,
     guardMembership,
     validateBody(sendMessageSchema),
     asyncHandler(controller.send)
@@ -35,6 +47,7 @@ export function createMessagesRouter(messagesService: MessagesService, membershi
   router.post(
     "/:conversationId/read",
     requireAuth,
+    conversationParams,
     guardMembership,
     validateBody(markReadSchema),
     asyncHandler(controller.markRead)

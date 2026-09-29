@@ -39,6 +39,10 @@ export const listMessagesQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).optional(),
 });
 
+export const conversationParamsSchema = z.object({
+  conversationId: z.string().uuid("conversationId must be a valid ID"),
+});
+
 export const messageParamsSchema = z.object({
   conversationId: z.string().uuid("conversationId must be a valid ID"),
   messageId: z.string().uuid("messageId must be a valid ID"),

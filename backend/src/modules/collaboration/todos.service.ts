@@ -65,6 +65,10 @@ interface ItemRow {
   updated_at: Date;
 }
 
+/** Lists per conversation (matches the list query's LIMIT) and items per list — bounded so every row stays visible. */
+export const MAX_TODO_LISTS_PER_CONVERSATION = 100;
+export const MAX_TODO_ITEMS_PER_LIST = 500;
+
 const SELECT_LIST = `SELECT l.*, u.display_name AS created_by_name FROM shared_todo_lists l JOIN users u ON u.id = l.created_by`;
 const SELECT_ITEM = `SELECT i.*, au.display_name AS assignee_name FROM shared_todo_items i LEFT JOIN users au ON au.id = i.assignee_id`;
 
@@ -164,7 +168,7 @@ export class SharedTodosService {
 
   async listForConversation(conversationId: string, userId: string): Promise<TodoListDTO[]> {
     await this.access.require(conversationId, userId);
-    const result = await this.db.query<ListRow>(`${SELECT_LIST} WHERE l.conversation_id = $1 ORDER BY l.created_at ASC LIMIT 100`, [
+    const result = await this.db.query<ListRow>(`${SELECT_LIST} WHERE l.conversation_id = $1 ORDER BY l.created_at ASC LIMIT ${MAX_TODO_LISTS_PER_CONVERSATION}`, [
       conversationId,
     ]);
     const counts = await this.counts(result.rows.map((row) => row.id));
@@ -173,12 +177,19 @@ export class SharedTodosService {
 
   async getList(listId: string, userId: string): Promise<TodoListWithItemsDTO> {
     await this.loadList(listId, userId);
-    const items = await this.db.query<ItemRow>(`${SELECT_ITEM} WHERE i.list_id = $1 ORDER BY i.created_at ASC`, [listId]);
+    const items = await this.db.query<ItemRow>(`${SELECT_ITEM} WHERE i.list_id = $1 ORDER BY i.created_at ASC LIMIT ${MAX_TODO_ITEMS_PER_LIST}`, [listId]);
     return { ...(await this.listDTO(listId)), items: items.rows.map(toItem) };
   }
 
   async createList(userId: string, conversationId: string, title: string): Promise<TodoListDTO> {
     await this.access.require(conversationId, userId);
+    const existing = await this.db.query<{ count: string }>(
+      "SELECT COUNT(*)::text AS count FROM shared_todo_lists WHERE conversation_id = $1",
+      [conversationId]
+    );
+    if (Number(existing.rows[0]?.count ?? "0") >= MAX_TODO_LISTS_PER_CONVERSATION) {
+      throw new AppError(`A conversation can have at most ${MAX_TODO_LISTS_PER_CONVERSATION} to-do lists`, 409);
+    }
     const id = generateId();
     await this.db.query("INSERT INTO shared_todo_lists (id, conversation_id, title, created_by) VALUES ($1, $2, $3, $4)", [
       id,
@@ -216,6 +227,10 @@ export class SharedTodosService {
   async addItem(listId: string, userId: string, input: ItemInput & { title: string }): Promise<TodoItemDTO> {
     const { list } = await this.loadList(listId, userId);
     if (input.assigneeId) await this.requireAssignable(list.conversation_id, input.assigneeId);
+    const existing = await this.db.query<{ count: string }>("SELECT COUNT(*)::text AS count FROM shared_todo_items WHERE list_id = $1", [listId]);
+    if (Number(existing.rows[0]?.count ?? "0") >= MAX_TODO_ITEMS_PER_LIST) {
+      throw new AppError(`A to-do list can have at most ${MAX_TODO_ITEMS_PER_LIST} items`, 409);
+    }
     const id = generateId();
     await this.db.query(
       `INSERT INTO shared_todo_items (id, list_id, title, notes, assignee_id, priority, due_at, created_by)

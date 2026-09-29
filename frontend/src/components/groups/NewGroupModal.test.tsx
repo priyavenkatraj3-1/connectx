@@ -65,6 +65,15 @@ describe("NewGroupModal", () => {
     vi.mocked(groupService.create).mockReset();
   });
 
+  it("is an accessible modal dialog that closes on Escape (Phase 7)", async () => {
+    const user = userEvent.setup();
+    const onClose = renderModal();
+    const dialog = screen.getByRole("dialog", { name: "New group" });
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    await user.keyboard("{Escape}");
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it("requires a name and at least one member before creating", async () => {
     const user = userEvent.setup();
     renderModal();

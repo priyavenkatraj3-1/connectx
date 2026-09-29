@@ -9,6 +9,7 @@ import type { MediaRepository } from "../media/media.repository";
 import type { StorageProvider } from "../media/storage/storage-provider.interface";
 import { aggregateStatus, AttachmentUnavailableError, type MessagesRepository } from "./messages.repository";
 import type { MessageDTO, MessagePage, MessageStatus, SendMessageParams } from "./messages.types";
+import { logger } from "../../utils/logger";
 
 /** Attachment kind → messages.content_type (the Phase 1 CHECK constraint has no 'document'). */
 const CONTENT_TYPE_BY_KIND = {
@@ -181,7 +182,7 @@ export class MessagesService implements MessageService {
         senderId: input.senderId,
         senderName: message.sender.displayName,
         mentionedUserIds,
-      }).catch((err) => console.error("[mention notification failed]", err));
+      }).catch((err) => logger.error("[mention notification failed]", err));
     }
 
     return message;

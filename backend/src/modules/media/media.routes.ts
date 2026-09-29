@@ -1,4 +1,4 @@
-import express, { Router, type NextFunction, type Request, type Response } from "express";
+import express, { Router, type NextFunction, type Request, type RequestHandler, type Response } from "express";
 import { AppError } from "../../middleware/errorHandler";
 import { requireAuth } from "../../middleware/requireAuth";
 import { validateParams, validateQuery } from "../../middleware/validate";
@@ -12,7 +12,11 @@ import { attachmentParamsSchema, uploadQuerySchema } from "./media.validation";
  * extra dependency): POST /media?conversationId=…&filename=…[&mimeType=…]
  * with Content-Type: application/octet-stream.
  */
-export function createMediaRouter(mediaService: MediaService, maxUploadBytes: number): Router {
+export function createMediaRouter(
+  mediaService: MediaService,
+  maxUploadBytes: number,
+  uploadLimiter: RequestHandler = (_req, _res, next) => next()
+): Router {
   const controller = new MediaController(mediaService);
   const router = Router();
   const attachmentParams = validateParams(attachmentParamsSchema);
@@ -32,6 +36,7 @@ export function createMediaRouter(mediaService: MediaService, maxUploadBytes: nu
   router.post(
     "/",
     requireAuth,
+    uploadLimiter,
     validateQuery(uploadQuerySchema),
     rawBody,
     handleBodyErrors,

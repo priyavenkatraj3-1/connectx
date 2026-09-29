@@ -1,9 +1,19 @@
+import { randomUUID } from "crypto";
+import { isUniqueViolation } from "../../db/errors";
 import { AppError } from "../../middleware/errorHandler";
 import type { NotificationsService } from "../notifications/notifications.service";
 import type { DeviceInfo, SessionsService } from "../sessions/sessions.service";
 import type { UserRepository } from "./interfaces/user-repository.interface";
 import { hashPassword, verifyPassword } from "./password.service";
 import type { LoginInput, SignupInput } from "./auth.validation";
+
+let dummyHash: Promise<string> | null = null;
+
+/** A real bcrypt hash (same cost as stored hashes) of a random value, compared against when the email is unknown. */
+function dummyPasswordHash(): Promise<string> {
+  dummyHash ??= hashPassword(randomUUID());
+  return dummyHash;
+}
 
 export interface AuthTokens {
   accessToken: string;
@@ -35,23 +45,28 @@ export class AuthService {
     }
 
     const passwordHash = await hashPassword(input.password);
-    const user = await this.userRepository.create({
-      email: input.email,
-      passwordHash,
-      displayName: input.displayName,
-    });
+    let user;
+    try {
+      user = await this.userRepository.create({
+        email: input.email,
+        passwordHash,
+        displayName: input.displayName,
+      });
+    } catch (err) {
+      // Two signups for the same email racing past the check above.
+      if (isUniqueViolation(err)) throw new AppError("An account with this email already exists", 409);
+      throw err;
+    }
 
     return this.buildAuthResult(user.id, user.email, user.displayName, { ...device, ...deviceFromInput(input) });
   }
 
   async login(input: LoginInput, device: DeviceInfo = {}): Promise<AuthResult> {
     const user = await this.userRepository.findByEmail(input.email);
-    if (!user) {
-      throw new AppError("Invalid email or password", 401);
-    }
-
-    const passwordMatches = await verifyPassword(input.password, user.passwordHash);
-    if (!passwordMatches) {
+    // Always run one bcrypt comparison, even for unknown emails, so response
+    // time doesn't reveal whether an account exists.
+    const passwordMatches = await verifyPassword(input.password, user?.passwordHash ?? (await dummyPasswordHash()));
+    if (!user || !passwordMatches) {
       throw new AppError("Invalid email or password", 401);
     }
 

@@ -45,6 +45,9 @@ function toConversation(row: ConversationRow): Conversation {
   };
 }
 
+/** Conversations whose previews are fetched concurrently when building the chat list (well under the pg pool size). */
+const LIST_QUERY_CONCURRENCY = 4;
+
 function placeholders(values: unknown[], offset = 0): string {
   return values.map((_, i) => `$${i + 1 + offset}`).join(", ");
 }
@@ -291,12 +294,26 @@ export class ConversationsRepository {
       for (const row of counts.rows) memberCounts.set(row.conversation_id, Number(row.member_count));
     }
 
+    // Last message + unread count per conversation: two small indexed
+    // queries each, run a few conversations at a time (instead of strictly
+    // one after another) so a long chat list doesn't cost 2×N round trips.
+    const previews = new Map<string, { lastMessage: LastMessagePreview | null; unreadCount: number }>();
+    for (let i = 0; i < memberships.rows.length; i += LIST_QUERY_CONCURRENCY) {
+      const chunk = memberships.rows.slice(i, i + LIST_QUERY_CONCURRENCY);
+      await Promise.all(
+        chunk.map(async (row) => {
+          const [lastMessage, unreadCount] = await Promise.all([
+            this.getLastMessage(row.conversation_id, userId),
+            this.getUnreadCount(row.conversation_id, userId, row.last_read_message_id),
+          ]);
+          previews.set(row.conversation_id, { lastMessage, unreadCount });
+        })
+      );
+    }
+
     const summaries: ConversationSummary[] = [];
     for (const row of memberships.rows) {
-      const [lastMessage, unreadCount] = await Promise.all([
-        this.getLastMessage(row.conversation_id, userId),
-        this.getUnreadCount(row.conversation_id, userId, row.last_read_message_id),
-      ]);
+      const { lastMessage, unreadCount } = previews.get(row.conversation_id)!;
 
       if (row.type === "direct") {
         const otherUserId = otherUserByConversation.get(row.conversation_id);

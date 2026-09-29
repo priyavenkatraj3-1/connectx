@@ -153,7 +153,10 @@ ones:
 | Variable | Purpose |
 |---|---|
 | `PORT` | Backend port (default `4000`) |
-| `CLIENT_ORIGIN` | Allowed CORS origin (default `http://localhost:5173`) |
+| `NODE_ENV` | `production` enables startup safety checks (secret strength, CORS) |
+| `CLIENT_ORIGIN` | Allowed frontend origin(s) for CORS and the WebSocket Origin check, comma-separated (default `http://localhost:5173`) |
+| `TRUST_PROXY` | Set to `1` behind one reverse proxy so rate limits see real client IPs (default `false`) |
+| `LOG_LEVEL` | `error` · `warn` · `info` (default) · `debug` · `silent` |
 | `DATABASE_URL` | PostgreSQL connection string — **required**, see above |
 | `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` | Required — long random secrets for signing tokens |
 | `BCRYPT_SALT_ROUNDS` | Password hashing cost factor (default `12`) |
@@ -166,6 +169,7 @@ ones:
 | `AI_PROVIDER` / `AI_PROVIDER_API_KEY` / `AI_MODEL` | AI provider: `none` (default — AI features report "not configured") or `anthropic`. See [docs/ai.md](docs/ai.md#configuration) |
 | `AI_RATE_LIMIT_PER_MINUTE` / `AI_RATE_LIMIT_PER_DAY` | Per-user AI request limits (default `10` / `200`) |
 | `TRANSCRIPTION_PROVIDER` / `TRANSCRIPTION_BASE_URL` | Speech-to-text for Voice Intelligence: `none` (default) or `whisper-http` |
+| `RATE_LIMIT_*`, `AUTH_RATE_LIMIT_MAX`, `*_RATE_LIMIT_PER_*`, `WS_*` | Server-side abuse limits (in memory, per process) — see [docs/security.md](docs/security.md#9-rate-limiting-and-abuse-protection) |
 | `SCHEDULER_INTERVAL_SECONDS` | How often the in-process scheduler checks for due reminders, tasks and scheduled messages (default `15`, minimum `5`) |
 
 The frontend reads `VITE_API_BASE_URL` (defaults to
@@ -195,6 +199,23 @@ npm run build
 ```
 
 ## Currently implemented features
+
+### Phase 7 — Security, performance & production readiness (final phase)
+
+No new product features. An audit and hardening pass over everything
+below: stricter token verification and login behavior, per-user and
+WebSocket abuse limits, input-validation gaps closed (no more `500`s on
+malformed IDs), crash handlers and graceful shutdown, a readiness probe,
+safe logging, bounded list queries, accessible modals, and honest
+production documentation:
+
+- [docs/security.md](docs/security.md) — the final security statement:
+  what is implemented, how it's verified, and what is **not** implemented
+- [docs/deployment.md](docs/deployment.md) — backend, frontend,
+  PostgreSQL, reverse proxy/WebSockets, TURN, storage, scheduler, health checks
+- [docs/backup-recovery.md](docs/backup-recovery.md)
+- [docs/manual-testing-final.md](docs/manual-testing-final.md) — the release
+  checklist, each item tagged automated / manual / infrastructure-dependent
 
 ### Phase 6 — Advanced productivity & collaboration
 
@@ -322,7 +343,14 @@ Details: [docs/calls.md](docs/calls.md), [docs/status.md](docs/status.md).
 See [docs/api.md](docs/api.md) for every endpoint and event, and
 [docs/security.md](docs/security.md) for what's covered.
 
-## Known limitations (Phase 6)
+## Known limitations
+
+The complete, current list lives in [docs/security.md](docs/security.md#12-what-is-explicitly-not-implemented)
+and [docs/deployment.md](docs/deployment.md#supported-topology-read-this-first).
+Most important: **run a single backend instance**, there is **no
+end-to-end encryption**, **no push notifications**, **no malware scanning**,
+and calls across the internet need **STUN/TURN** you deploy yourself.
+Details by area follow.
 
 Productivity & multi-device:
 
@@ -442,6 +470,7 @@ place today.
 - Phase 4 (two browser sessions, voice/video calls, status, privacy, expiry): [docs/manual-testing-phase4.md](docs/manual-testing-phase4.md)
 - Phase 5 (AI consent, each AI feature, unconfigured provider, limits): [docs/manual-testing-phase5.md](docs/manual-testing-phase5.md)
 - Phase 6 (tasks, shared notes/to-dos, pins, scheduling, notifications, devices, offline, business): [docs/manual-testing-phase6.md](docs/manual-testing-phase6.md)
+- **Final release checklist (all features, tagged automated / manual / infrastructure):** [docs/manual-testing-final.md](docs/manual-testing-final.md)
 
 ## Planned phases
 
@@ -456,10 +485,13 @@ place today.
 5. **AI Features & Privacy Layer** ✅ — provider abstraction,
    consent, Ask Your Chats, memory, actions, group decisions, translation,
    scam shield, voice intelligence foundation
-6. **Advanced Productivity & Collaboration** ✅ (this phase) — tasks,
+6. **Advanced Productivity & Collaboration** ✅ — tasks,
    reminders, events, shared notes/to-dos, pins/saved, Productivity Mode,
    scheduled messages, in-app notifications, multi-device sessions,
    offline foundation, business profile & quick replies
-7. **Later** — horizontal scaling, native mobile/desktop clients
+7. **Security, Performance & Production Readiness** ✅ (final phase) —
+   security/authorization audit and hardening, abuse limits, reliability,
+   deployment/backup/security documentation, final test plan
+8. **Not planned** — horizontal scaling, native mobile/desktop clients
 
 Full detail: [docs/development-phases.md](docs/development-phases.md).

@@ -21,13 +21,23 @@ Status codes used consistently across modules: `400` validation failure
 authenticated but not allowed (not a member, wrong role, not the author),
 `404` resource doesn't exist, `409` conflict (duplicate membership,
 attachment already sent, call already in progress / user busy), `413` file
-too large, `415` unsupported/spoofed file type.
+or body too large, `415` unsupported/spoofed file type, `429` rate limited
+(`"code": "rate_limited"`, with `RateLimit-*` headers — limits in
+[security.md](./security.md#9-rate-limiting-and-abuse-protection)). Some
+errors add a machine-readable `"code"` next to `"message"`. A `500` never
+carries internal details.
 
 ## Health
 
 ### `GET /health` (unversioned, outside `/api/v1`)
 
-Returns `200 { "status": "ok", "service": "connectx-backend" }`.
+Liveness. Returns `200 { "status": "ok", "service": "connectx-backend" }`.
+Not rate-limited.
+
+### `GET /health/ready` (unversioned)
+
+Readiness: `200 { "status": "ready" }` when the database answers, otherwise
+`503 { "status": "unavailable" }`.
 
 ## Auth — `modules/auth` (fully implemented, persistent)
 
@@ -86,11 +96,15 @@ Returns the authenticated user's own profile: `{ id, email, displayName, avatarU
 ### `PATCH /api/v1/users/me` — requires auth
 
 Body: any of `{ displayName?, bio?, statusMessage?, avatarUrl? }` (at least
-one field). Returns the updated profile.
+one field; `avatarUrl` must be an `http(s)` URL). Returns the updated profile.
 
 ### `GET /api/v1/users/search?q=<query>` — requires auth
 
-Case-insensitive partial match on display name or email. Returns
+Case-insensitive partial match on display name, or an exact
+(case-insensitive) match on a full email address — email fragments don't
+match, so the endpoint can't be used to probe which addresses are
+registered; `%` and `_` are matched literally. Rate-limited per user.
+Returns
 `{ results: PublicProfile[] }` — `id`, `displayName`, `avatarUrl`,
 `statusMessage` only; email is never included in results. Excludes the
 requesting user.
@@ -546,6 +560,14 @@ during the HTTP Upgrade handshake with a `401` — the socket never opens.
 across reconnects; calls are bound to it (see [calls.md](./calls.md)).
 Inbound frames over 128KB close the connection; every client event is
 schema-validated before use.
+
+Phase 7 limits (defaults, configurable — see [security.md](./security.md#6-websocket-security)):
+a handshake with an `Origin` header not in `CLIENT_ORIGIN` → `403`; more
+than 20 open connections for one user → `429` (reusing your own `cid`
+always works); more than 300 frames in 10 seconds on one connection →
+closed with `1008`; the server pings every 30 seconds and terminates
+connections that didn't answer the previous ping; on shutdown connections
+close with `1001` (reconnect). Revoked sessions close with `4401`.
 
 Events are only ever sent to users entitled to them: active members of the
 conversation, plus the affected user for removals/leaves.

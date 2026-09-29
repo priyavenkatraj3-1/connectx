@@ -48,23 +48,26 @@ export class PostgresUserRepository implements UserRepository {
 
   async create(user: Omit<AuthUserRecord, "id" | "createdAt">): Promise<AuthUserRecord> {
     const id = generateId();
-    const result = await this.db.query<UserRow>(
-      `INSERT INTO users (id, email, password_hash, display_name)
-       VALUES ($1, $2, $3, $4)
-       RETURNING id, email, password_hash, display_name, created_at`,
-      [id, user.email, user.passwordHash, user.displayName]
-    );
-    const row = result.rows[0];
-    if (!row) {
-      throw new Error("Failed to create user");
-    }
+    // One transaction: an account is never left without its profile/privacy rows.
+    return this.db.withTransaction(async (tx) => {
+      const result = await tx.query<UserRow>(
+        `INSERT INTO users (id, email, password_hash, display_name)
+         VALUES ($1, $2, $3, $4)
+         RETURNING id, email, password_hash, display_name, created_at`,
+        [id, user.email, user.passwordHash, user.displayName]
+      );
+      const row = result.rows[0];
+      if (!row) {
+        throw new Error("Failed to create user");
+      }
 
-    // A fresh account gets an empty profile row and default privacy
-    // settings up front so every other Phase 2 query (profile lookups,
-    // AI consent checks) can rely on the row existing.
-    await this.db.query("INSERT INTO user_profiles (user_id) VALUES ($1)", [id]);
-    await this.db.query("INSERT INTO privacy_settings (user_id) VALUES ($1)", [id]);
+      // A fresh account gets an empty profile row and default privacy
+      // settings up front so every other Phase 2 query (profile lookups,
+      // AI consent checks) can rely on the row existing.
+      await tx.query("INSERT INTO user_profiles (user_id) VALUES ($1)", [id]);
+      await tx.query("INSERT INTO privacy_settings (user_id) VALUES ($1)", [id]);
 
-    return toRecord(row);
+      return toRecord(row);
+    });
   }
 }

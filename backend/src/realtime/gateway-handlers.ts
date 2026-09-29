@@ -1,4 +1,5 @@
 import type { Container } from "../container";
+import { env } from "../config/env";
 import type { WebSocketGatewayOptions } from "./ws.server";
 
 /**
@@ -14,5 +15,9 @@ export function buildGatewayOptions(container: Container): WebSocketGatewayOptio
     onConnect: (ctx) => container.callsService.handleConnect(ctx),
     onDisconnect: (ctx) => container.callsService.handleDisconnect(ctx),
     validateSession: (userId, sessionId) => container.sessionsService.isActive(userId, sessionId),
+    allowedOrigins: env.clientOrigins,
+    maxMessagesPer10s: env.ws.maxMessagesPer10s,
+    maxConnectionsPerUser: env.ws.maxConnectionsPerUser,
+    heartbeatIntervalMs: env.ws.heartbeatIntervalMs,
   };
 }

@@ -94,19 +94,23 @@ export class UsersRepository {
   }
 
   /**
-   * Case-insensitive partial match on display name or email. Email is only
-   * used for matching, never returned — search results expose public
-   * profile fields only.
+   * Case-insensitive partial match on display name, or an exact
+   * (case-insensitive) match on the full email address. Email is only used
+   * for matching, never returned — search results expose public profile
+   * fields only. Partial email matching is deliberately not offered: it
+   * would let anyone probe which addresses are registered one fragment at
+   * a time. LIKE wildcards in the query are escaped so "%" or "_" can't be
+   * used to list every user.
    */
   async search(query: string, excludeUserId: string, limit = 20): Promise<PublicProfile[]> {
-    const pattern = `%${query}%`;
+    const pattern = `%${query.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
     const result = await this.db.query<ProfileRow>(
       `${OWN_PROFILE_SELECT}
          AND u.id != $1
-         AND (u.display_name ILIKE $2 OR u.email ILIKE $2)
+         AND (u.display_name ILIKE $2 OR lower(u.email) = lower($3))
        ORDER BY u.display_name ASC
-       LIMIT $3`,
-      [excludeUserId, pattern, limit]
+       LIMIT $4`,
+      [excludeUserId, pattern, query, limit]
     );
     return result.rows.map(toPublicProfile);
   }

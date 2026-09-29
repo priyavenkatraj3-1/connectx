@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 import { useConversations } from "../../context/ConversationsContext";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
+import { useEscapeKey } from "../../hooks/useEscapeKey";
 import { conversationService } from "../../services/conversationService";
 import { userService } from "../../services/userService";
 import type { PublicProfile } from "../../types/user";
@@ -20,6 +21,7 @@ export function NewConversationModal({ onClose }: { onClose: () => void }) {
   const [isSearching, setIsSearching] = useState(false);
   const [startingChatWith, setStartingChatWith] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  useEscapeKey(onClose);
 
   useEffect(() => {
     if (!accessToken || !debouncedQuery.trim()) {
@@ -64,11 +66,16 @@ export function NewConversationModal({ onClose }: { onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 p-4 pt-20" onClick={onClose}>
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="new-conversation-title"
         className="w-full max-w-md rounded-xl2 bg-white shadow-xl dark:bg-surface-dark-subtle"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="border-b border-slate-100 p-4 dark:border-slate-800">
-          <h2 className="mb-3 text-base font-semibold text-slate-900 dark:text-slate-100">New conversation</h2>
+          <h2 id="new-conversation-title" className="mb-3 text-base font-semibold text-slate-900 dark:text-slate-100">
+            New conversation
+          </h2>
           <label className="relative block">
             <span className="sr-only">Search people</span>
             <SearchIcon className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />

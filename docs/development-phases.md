@@ -196,7 +196,42 @@ to a later phase.
   native mobile/desktop client shells
 - **Known limitations:** see the README's *Known limitations (Phase 6)*
 
-## Later — Scale & native clients (planned)
+## Phase 7 — Security, Performance & Production Readiness ✅ (final phase)
+
+No new product features — an audit and hardening pass over Phases 1–6.
+
+- **Auth** — JWT verification pinned to HS256; login no longer reveals
+  whether an email exists (identical response, constant bcrypt work);
+  refresh endpoint rate-limited; concurrent duplicate signups → `409`
+  instead of `500`; user creation is transactional; production startup
+  refuses weak/placeholder/shared JWT secrets and wildcard CORS
+- **Input validation** — malformed IDs on the remaining routes and any
+  PostgreSQL data exception now answer `400` instead of `500`; unknown IANA
+  timezones rejected at the schema; `avatarUrl` limited to http(s); user
+  search escapes `LIKE` wildcards and no longer matches email fragments
+- **Abuse limits** — per-user limits on sending, uploads, search, call
+  starts and statuses; configurable IP limits; `TRUST_PROXY`; WebSocket
+  Origin allow-list, per-connection frame limit, per-user connection cap
+  and heartbeat
+- **Reliability** — leveled logger (`LOG_LEVEL`), DB password no longer
+  logged, `unhandledRejection`/`uncaughtException` handlers, graceful
+  shutdown, readiness probe `/health/ready`, strict numeric env parsing,
+  scheduler isolates per-item failures
+- **Performance** — chat-list previews fetched with bounded concurrency
+  instead of 2×N sequential queries; caps on shared notes/to-do
+  lists/items so list queries stay bounded and complete
+- **Frontend accessibility** — dialog semantics (`role="dialog"`,
+  `aria-modal`) and Escape-to-close on every modal
+- **Docs** — [security.md](./security.md) (final statement),
+  [deployment.md](./deployment.md), [backup-recovery.md](./backup-recovery.md),
+  [manual-testing-final.md](./manual-testing-final.md)
+- **Verified by:** new `security.test.ts`, `ws-security.test.ts`,
+  `production-readiness.test.ts` and a modal accessibility test on top of
+  the existing suites; backend suite run against pg-mem and real
+  PostgreSQL 16; production build started against real PostgreSQL with
+  API and WebSocket smoke checks. Nothing was deployed.
+
+## Later — Scale & native clients (not planned in this project)
 
 - Horizontal scaling of the backend (shared realtime pub/sub, shared media
   storage, a single-leader or queue-based scheduler)

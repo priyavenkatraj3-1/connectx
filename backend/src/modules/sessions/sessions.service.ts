@@ -50,6 +50,8 @@ interface SessionRow {
 
 /** How often (at most) a session's last_seen_at is written. Keeps the per-request cost to one indexed read. */
 const TOUCH_INTERVAL_MS = 60_000;
+/** Bound on the in-memory throttle map, so a long-running process can't grow it without limit. */
+const MAX_TOUCH_CACHE = 10_000;
 
 function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
@@ -163,6 +165,8 @@ export class SessionsService {
   private async touch(sessionId: string): Promise<void> {
     const now = Date.now();
     if (now - (this.lastTouched.get(sessionId) ?? 0) < TOUCH_INTERVAL_MS) return;
+    // A throttle cache only: dropping it just means one extra UPDATE per session.
+    if (this.lastTouched.size >= MAX_TOUCH_CACHE) this.lastTouched.clear();
     this.lastTouched.set(sessionId, now);
     await this.db.query("UPDATE sessions SET last_seen_at = now() WHERE id = $1", [sessionId]);
     await this.db.query("UPDATE devices SET last_active_at = now() WHERE id = (SELECT device_id FROM sessions WHERE id = $1)", [sessionId]);

@@ -38,6 +38,9 @@ interface NoteRow {
   updated_at: Date;
 }
 
+/** Notes per conversation. Matches the list query's LIMIT, so no note is ever hidden from the list. */
+export const MAX_NOTES_PER_CONVERSATION = 200;
+
 const SELECT_NOTE = `
   SELECT n.*, cu.display_name AS created_by_name, uu.display_name AS updated_by_name
   FROM shared_notes n
@@ -107,7 +110,7 @@ export class SharedNotesService {
 
   async list(conversationId: string, userId: string): Promise<SharedNoteDTO[]> {
     const access = await this.access.require(conversationId, userId);
-    const result = await this.db.query<NoteRow>(`${SELECT_NOTE} WHERE n.conversation_id = $1 ORDER BY n.updated_at DESC LIMIT 200`, [
+    const result = await this.db.query<NoteRow>(`${SELECT_NOTE} WHERE n.conversation_id = $1 ORDER BY n.updated_at DESC LIMIT ${MAX_NOTES_PER_CONVERSATION}`, [
       conversationId,
     ]);
     return result.rows.map((row) => toDTO(row, userId, access));
@@ -126,6 +129,12 @@ export class SharedNotesService {
     const editPolicy = input.editPolicy ?? "members";
     if (editPolicy === "admins" && !(access.type === "group" && access.isAdmin)) {
       throw new AppError("Only group admins can create admin-only notes", 403);
+    }
+    const existing = await this.db.query<{ count: string }>("SELECT COUNT(*)::text AS count FROM shared_notes WHERE conversation_id = $1", [
+      input.conversationId,
+    ]);
+    if (Number(existing.rows[0]?.count ?? "0") >= MAX_NOTES_PER_CONVERSATION) {
+      throw new AppError(`A conversation can have at most ${MAX_NOTES_PER_CONVERSATION} shared notes`, 409);
     }
     const id = generateId();
     await this.db.query(

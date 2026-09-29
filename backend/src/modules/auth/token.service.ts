@@ -13,21 +13,28 @@ export interface RefreshTokenPayload {
   sessionId: string;
 }
 
+/** Only HMAC-SHA256 is ever issued; pinning it on verify rules out algorithm-confusion tricks ("none", RS/HS swaps). */
+const ALGORITHM = "HS256" as const;
+
 export function signAccessToken(payload: AccessTokenPayload): string {
-  const options: jwt.SignOptions = { expiresIn: env.jwt.accessExpiry as jwt.SignOptions["expiresIn"] };
+  const options: jwt.SignOptions = { algorithm: ALGORITHM, expiresIn: env.jwt.accessExpiry as jwt.SignOptions["expiresIn"] };
   return jwt.sign(payload, env.jwt.accessSecret, options);
 }
 
 export function signRefreshToken(payload: RefreshTokenPayload): string {
   // A unique jti makes every rotated refresh token distinct, even within the same second.
-  const options: jwt.SignOptions = { expiresIn: env.jwt.refreshExpiry as jwt.SignOptions["expiresIn"], jwtid: randomUUID() };
+  const options: jwt.SignOptions = {
+    algorithm: ALGORITHM,
+    expiresIn: env.jwt.refreshExpiry as jwt.SignOptions["expiresIn"],
+    jwtid: randomUUID(),
+  };
   return jwt.sign({ userId: payload.userId, sessionId: payload.sessionId }, env.jwt.refreshSecret, options);
 }
 
 export function verifyAccessToken(token: string): AccessTokenPayload {
-  return jwt.verify(token, env.jwt.accessSecret) as AccessTokenPayload;
+  return jwt.verify(token, env.jwt.accessSecret, { algorithms: [ALGORITHM] }) as AccessTokenPayload;
 }
 
 export function verifyRefreshToken(token: string): RefreshTokenPayload {
-  return jwt.verify(token, env.jwt.refreshSecret) as RefreshTokenPayload;
+  return jwt.verify(token, env.jwt.refreshSecret, { algorithms: [ALGORITHM] }) as RefreshTokenPayload;
 }

@@ -1,7 +1,8 @@
 import { Router } from "express";
 import { requireAuth } from "../../middleware/requireAuth";
 import { requireConversationMember } from "../../middleware/requireConversationMember";
-import { validateBody } from "../../middleware/validate";
+import { validateBody, validateParams } from "../../middleware/validate";
+import { conversationParamsSchema } from "../messages/messages.validation";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { ConversationsController } from "./conversations.controller";
 import type { ConversationsService } from "./conversations.service";
@@ -21,6 +22,7 @@ export function createConversationsRouter(conversationsService: ConversationsSer
   router.get(
     "/:conversationId",
     requireAuth,
+    validateParams(conversationParamsSchema),
     asyncHandler(requireConversationMember(conversationsService)),
     asyncHandler(controller.getById)
   );

@@ -3,6 +3,7 @@ import type { AIProvider, TranscriptionProvider } from "../interfaces/ai-provide
 import { AnthropicProvider } from "./anthropic.provider";
 import { NoneAIProvider, NoneTranscriptionProvider } from "./none.provider";
 import { WhisperHttpTranscriptionProvider } from "./whisper-http.transcription";
+import { logger } from "../../../utils/logger";
 
 /**
  * Selects the text-generation provider from `AI_PROVIDER`. Feature services
@@ -13,7 +14,7 @@ export function createAIProvider(config: typeof env.ai = env.ai): AIProvider {
   switch (config.provider) {
     case "anthropic":
       if (!config.apiKey) {
-        console.warn("[ai] AI_PROVIDER=anthropic but AI_PROVIDER_API_KEY is empty — AI features stay unavailable.");
+        logger.warn("[ai] AI_PROVIDER=anthropic but AI_PROVIDER_API_KEY is empty — AI features stay unavailable.");
         return new NoneAIProvider();
       }
       return new AnthropicProvider({
@@ -25,7 +26,7 @@ export function createAIProvider(config: typeof env.ai = env.ai): AIProvider {
     case "none":
       return new NoneAIProvider();
     default:
-      console.warn(`[ai] Unknown AI_PROVIDER "${config.provider}" — AI features stay unavailable.`);
+      logger.warn(`[ai] Unknown AI_PROVIDER "${config.provider}" — AI features stay unavailable.`);
       return new NoneAIProvider();
   }
 }
@@ -35,14 +36,14 @@ export function createTranscriptionProvider(config: typeof env.ai.transcription 
   switch (config.provider) {
     case "whisper-http":
       if (!config.baseUrl) {
-        console.warn("[ai] TRANSCRIPTION_PROVIDER=whisper-http but TRANSCRIPTION_BASE_URL is empty — transcription stays unavailable.");
+        logger.warn("[ai] TRANSCRIPTION_PROVIDER=whisper-http but TRANSCRIPTION_BASE_URL is empty — transcription stays unavailable.");
         return new NoneTranscriptionProvider();
       }
       return new WhisperHttpTranscriptionProvider({ baseUrl: config.baseUrl, apiKey: config.apiKey, model: config.model });
     case "none":
       return new NoneTranscriptionProvider();
     default:
-      console.warn(`[ai] Unknown TRANSCRIPTION_PROVIDER "${config.provider}" — transcription stays unavailable.`);
+      logger.warn(`[ai] Unknown TRANSCRIPTION_PROVIDER "${config.provider}" — transcription stays unavailable.`);
       return new NoneTranscriptionProvider();
   }
 }

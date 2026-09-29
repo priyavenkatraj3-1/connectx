@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { authRateLimiter } from "../../middleware/rateLimiter";
+import { authRateLimiter, refreshRateLimiter } from "../../middleware/rateLimiter";
 import { validateBody } from "../../middleware/validate";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { AuthController } from "./auth.controller";
@@ -12,7 +12,7 @@ export function createAuthRouter(authService: AuthService): Router {
 
   router.post("/signup", authRateLimiter, validateBody(signupSchema), asyncHandler(authController.signup));
   router.post("/login", authRateLimiter, validateBody(loginSchema), asyncHandler(authController.login));
-  router.post("/refresh", validateBody(refreshSchema), asyncHandler(authController.refresh));
+  router.post("/refresh", refreshRateLimiter, validateBody(refreshSchema), asyncHandler(authController.refresh));
   router.post("/logout", asyncHandler(authController.logout));
 
   return router;

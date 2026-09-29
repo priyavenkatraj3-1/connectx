@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 import { useConversations } from "../../context/ConversationsContext";
+import { useEscapeKey } from "../../hooks/useEscapeKey";
 import { groupService } from "../../services/groupService";
 import type { PublicProfile } from "../../types/user";
 import { Button } from "../ui/Button";
@@ -20,6 +21,9 @@ export function NewGroupModal({ onClose }: { onClose: () => void }) {
   const [members, setMembers] = useState<PublicProfile[]>([]);
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Escape is ignored while the group is being created, so the request isn't orphaned.
+  useEscapeKey(onClose, !isCreating);
 
   const canSubmit = name.trim().length > 0 && members.length > 0 && !isCreating;
 
@@ -49,6 +53,8 @@ export function NewGroupModal({ onClose }: { onClose: () => void }) {
         onSubmit={handleSubmit}
         className="flex max-h-[85vh] w-full max-w-md flex-col rounded-xl2 bg-white shadow-xl dark:bg-surface-dark-subtle"
         onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
         aria-labelledby="new-group-title"
       >
         <div className="border-b border-slate-100 p-4 dark:border-slate-800">

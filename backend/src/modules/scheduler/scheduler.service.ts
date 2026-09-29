@@ -4,6 +4,7 @@ import type { RealtimeGateway } from "../../realtime/gateway.interface";
 import type { NotificationsService } from "../notifications/notifications.service";
 import type { RemindersService } from "../productivity/reminders.service";
 import type { ScheduledMessagesService } from "../scheduled-messages/scheduled-messages.service";
+import { logger } from "../../utils/logger";
 
 export interface TickResult {
   remindersFired: number;
@@ -12,6 +13,16 @@ export interface TickResult {
 }
 
 const BATCH_SIZE = 100;
+
+interface ReminderRow {
+  id: string;
+  user_id: string;
+  title: string;
+  remind_at: Date;
+  task_id: string | null;
+  source_conversation_id: string | null;
+  source_message_id: string | null;
+}
 
 /**
  * The background worker for time-based Phase 6 features: firing reminders,
@@ -59,28 +70,39 @@ export class SchedulerService {
     );
     let fired = 0;
     for (const { id } of due.rows) {
-      const claimed = await this.db.query<{ id: string; user_id: string; title: string; remind_at: Date; task_id: string | null; source_conversation_id: string | null; source_message_id: string | null }>(
+      const claimed = await this.db.query<ReminderRow>(
         "UPDATE reminders SET status = 'fired', fired_at = now(), updated_at = now() WHERE id = $1 AND status = 'pending' RETURNING *",
         [id]
       );
       const reminder = claimed.rows[0];
       if (!reminder) continue;
       fired += 1;
-      const payload: Record<string, string> = { reminderId: reminder.id };
-      if (reminder.task_id) payload.taskId = reminder.task_id;
-      if (reminder.source_conversation_id) payload.conversationId = reminder.source_conversation_id;
-      if (reminder.source_message_id) payload.messageId = reminder.source_message_id;
-      await this.notifications.notify({
-        userId: reminder.user_id,
-        type: "reminder",
-        title: "Reminder",
-        body: reminder.title,
-        payload,
-        dedupeKey: `reminder:${reminder.id}:${new Date(reminder.remind_at).getTime()}`,
-      });
-      await this.reminders.publish(reminder.user_id, reminder.id);
+      // One item's failure (e.g. a notification insert error) must not stop
+      // the rest of the batch. The claim stands: delivery is at-most-once,
+      // so a persistently failing item can't loop every tick.
+      try {
+        await this.announceReminder(reminder);
+      } catch (err) {
+        logger.error(`[scheduler] reminder ${reminder.id} fired but its notification failed`, err);
+      }
     }
     return fired;
+  }
+
+  private async announceReminder(reminder: ReminderRow): Promise<void> {
+    const payload: Record<string, string> = { reminderId: reminder.id };
+    if (reminder.task_id) payload.taskId = reminder.task_id;
+    if (reminder.source_conversation_id) payload.conversationId = reminder.source_conversation_id;
+    if (reminder.source_message_id) payload.messageId = reminder.source_message_id;
+    await this.notifications.notify({
+      userId: reminder.user_id,
+      type: "reminder",
+      title: "Reminder",
+      body: reminder.title,
+      payload,
+      dedupeKey: `reminder:${reminder.id}:${new Date(reminder.remind_at).getTime()}`,
+    });
+    await this.reminders.publish(reminder.user_id, reminder.id);
   }
 
   private async notifyDueTasks(now: Date): Promise<number> {
@@ -101,14 +123,18 @@ export class SchedulerService {
       count += 1;
       const recipients = [task.owner_id, task.assignee_id].filter((userId): userId is string => !!userId);
       for (const userId of new Set(recipients)) {
-        await this.notifications.notify({
-          userId,
-          type: "task_due",
-          title: "Task due",
-          body: task.title,
-          payload: { taskId: task.id, ...(task.source_conversation_id ? { conversationId: task.source_conversation_id } : {}) },
-          dedupeKey: `task_due:${task.id}:${new Date(task.due_at).getTime()}`,
-        });
+        try {
+          await this.notifications.notify({
+            userId,
+            type: "task_due",
+            title: "Task due",
+            body: task.title,
+            payload: { taskId: task.id, ...(task.source_conversation_id ? { conversationId: task.source_conversation_id } : {}) },
+            dedupeKey: `task_due:${task.id}:${new Date(task.due_at).getTime()}`,
+          });
+        } catch (err) {
+          logger.error(`[scheduler] task ${task.id} is due but its notification failed`, err);
+        }
       }
       broadcast(this.gateway, recipients, { type: "task:due", taskId: task.id });
     }

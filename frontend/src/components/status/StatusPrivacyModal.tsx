@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "../../context/AuthContext";
+import { useEscapeKey } from "../../hooks/useEscapeKey";
 import { statusService } from "../../services/statusService";
 import type { StatusPrivacy } from "../../types/status";
 import { LoadingState } from "../common/LoadingState";
@@ -12,6 +13,7 @@ export function StatusPrivacyModal({ onClose }: { onClose(): void }) {
   const [privacy, setPrivacy] = useState<StatusPrivacy | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  useEscapeKey(onClose, !isSaving);
 
   useEffect(() => {
     if (!accessToken) return;
@@ -40,6 +42,7 @@ export function StatusPrivacyModal({ onClose }: { onClose(): void }) {
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:pt-12" onClick={onClose}>
       <div
         role="dialog"
+        aria-modal="true"
         aria-labelledby="status-privacy-title"
         onClick={(e) => e.stopPropagation()}
         className="flex w-full max-w-md flex-col rounded-xl2 bg-white shadow-xl dark:bg-surface-dark-subtle"

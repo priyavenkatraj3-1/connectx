@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useAuth } from "../../context/AuthContext";
 import { guessKind, mediaService, precheckStatusFile, type UploadHandle } from "../../services/mediaService";
+import { useEscapeKey } from "../../hooks/useEscapeKey";
 import { statusService } from "../../services/statusService";
 import {
   STATUS_BACKGROUND_COLORS,
@@ -86,6 +87,8 @@ export function CreateStatusModal({ onClose, onCreated }: CreateStatusModalProps
     uploadRef.current?.abort();
     onClose();
   }
+  // Escape = Cancel (not while publishing, so an in-flight upload is never orphaned).
+  useEscapeKey(handleCancel, !isPublishing);
 
   const canPublish =
     !!privacy &&
@@ -130,6 +133,8 @@ export function CreateStatusModal({ onClose, onCreated }: CreateStatusModalProps
       <form
         onSubmit={handleSubmit}
         onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
         aria-labelledby="create-status-title"
         className="flex w-full max-w-md flex-col rounded-xl2 bg-white shadow-xl dark:bg-surface-dark-subtle"
       >

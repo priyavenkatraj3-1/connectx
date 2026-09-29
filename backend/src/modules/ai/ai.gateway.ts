@@ -17,6 +17,7 @@ import {
   type TranscriptionProvider,
   type TranscriptionResult,
 } from "./interfaces/ai-provider.interface";
+import { logger } from "../../utils/logger";
 
 export interface AIGatewayOptions {
   timeoutMs: number;
@@ -226,7 +227,7 @@ export class AIGateway {
         );
         this.realtime.sendToUser(userId, { type: "ai:failed", requestId, feature, code });
         // Provider details stay in the server log; clients get a generic, coded error.
-        console.warn(`[ai] ${feature} failed for request ${requestId}: ${code}`);
+        logger.warn(`[ai] ${feature} failed for request ${requestId}: ${code}`);
         if (timedOut || code === "timeout") throw new AITimeoutError();
         if (code === "refused") throw new AIRefusedError();
         if (code === "not_configured") throw new AIUnavailableError();
@@ -261,7 +262,7 @@ export class AIGateway {
       });
     } catch (err) {
       // Usage logging must never break the feature itself.
-      console.error("[ai] failed to record usage", err);
+      logger.error("[ai] failed to record usage", err);
     }
   }
 }

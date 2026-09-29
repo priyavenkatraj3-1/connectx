@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isValidTimezone } from "../../utils/datetime";
 
 const uuid = (field: string) => z.string().uuid(`${field} must be a valid ID`);
 
@@ -8,7 +9,8 @@ export const isoDateTime = z.string().datetime({ offset: true, message: "Must be
 export const localDateTime = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/, "Must look like YYYY-MM-DDTHH:mm");
-export const timezoneField = z.string().trim().min(1).max(64);
+/** An IANA timezone the server's ICU data knows ("Europe/Berlin"); anything else is rejected up front, not stored. */
+export const timezoneField = z.string().trim().min(1).max(64).refine(isValidTimezone, "Unknown timezone");
 
 const priority = z.enum(["low", "medium", "high", "urgent"]);
 const taskStatus = z.enum(["todo", "in_progress", "completed", "cancelled"]);

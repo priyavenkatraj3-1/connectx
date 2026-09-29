@@ -33,6 +33,25 @@ export interface WebSocketGatewayOptions {
    * provided, tokens without a session ID are rejected too.
    */
   validateSession?: (userId: string, sessionId: string) => Promise<boolean>;
+  /**
+   * Phase 7: browser origins allowed to open a socket. A handshake carrying
+   * any other Origin header gets 403 (cross-site WebSocket hijacking
+   * defense, on top of the token requirement). Handshakes without an Origin
+   * header (non-browser clients) are judged by their token alone.
+   */
+  allowedOrigins?: string[];
+  /** Inbound frames allowed per connection per 10s; exceeding it closes the connection with 1008. Default 300. */
+  maxMessagesPer10s?: number;
+  /** Open connections allowed per user; further handshakes get 429. Default 20. */
+  maxConnectionsPerUser?: number;
+  /** Server ping interval; a connection that didn't answer the previous ping is terminated. Default 30s. */
+  heartbeatIntervalMs?: number;
+}
+
+/** The live gateway plus lifecycle control for the server process. */
+export interface WebSocketGateway extends RealtimeGateway {
+  /** Stops the heartbeat, closes every connection (1001 "going away") and stops accepting new ones. */
+  close(): Promise<void>;
 }
 
 interface AuthenticatedUpgradeRequest {
@@ -44,6 +63,17 @@ interface AuthenticatedUpgradeRequest {
 
 /** Close code sent to a connection whose session was signed out. */
 export const SESSION_REVOKED_CLOSE_CODE = 4401;
+/** Standard "policy violation" close code, used when a connection floods the server. */
+export const RATE_LIMITED_CLOSE_CODE = 1008;
+
+const RATE_WINDOW_MS = 10_000;
+
+interface ConnectionState {
+  /** Answered the last heartbeat ping (or sent something since). */
+  alive: boolean;
+  windowStart: number;
+  framesInWindow: number;
+}
 
 /**
  * Attaches a WebSocket server to the given HTTP server at WS_PATH and
@@ -59,9 +89,13 @@ export const SESSION_REVOKED_CLOSE_CODE = 4401;
  * *own* earlier connection (e.g. a reconnect racing the old socket's
  * close). A missing or malformed cid is replaced with a server-generated one.
  */
-export function attachWebSocketGateway(httpServer: HttpServer, options: WebSocketGatewayOptions): RealtimeGateway {
+export function attachWebSocketGateway(httpServer: HttpServer, options: WebSocketGatewayOptions): WebSocketGateway {
   const registry = new ConnectionRegistry();
   const sessionBySocket = new WeakMap<WebSocket, string>();
+  const stateBySocket = new WeakMap<WebSocket, ConnectionState>();
+  const maxFrames = options.maxMessagesPer10s ?? 300;
+  const maxConnections = options.maxConnectionsPerUser ?? 20;
+  const allowedOrigins = options.allowedOrigins ? new Set(options.allowedOrigins) : null;
 
   const wss = new WebSocketServer({
     server: httpServer,
@@ -73,6 +107,10 @@ export function attachWebSocketGateway(httpServer: HttpServer, options: WebSocke
     // would still fire the client's `open` event.
     verifyClient: (info, callback) => {
       const req = info.req as AuthenticatedUpgradeRequest;
+      if (allowedOrigins && info.origin && !allowedOrigins.has(info.origin)) {
+        callback(false, 403, "Forbidden");
+        return;
+      }
       const url = new URL(req.url ?? "", "http://localhost");
       const token = url.searchParams.get("token");
 
@@ -88,6 +126,14 @@ export function attachWebSocketGateway(httpServer: HttpServer, options: WebSocke
       req.connectXSessionId = payload.sid;
       const requestedCid = url.searchParams.get("cid")?.toLowerCase();
       req.connectXConnectionId = requestedCid && UUID_PATTERN.test(requestedCid) ? requestedCid : generateId();
+
+      // Cap concurrent connections per user. Re-using an existing connection
+      // ID replaces that connection, so a reconnect is always allowed.
+      const replacesExisting = !!registry.getSocket(payload.userId, req.connectXConnectionId);
+      if (!replacesExisting && registry.getSockets(payload.userId).length >= maxConnections) {
+        callback(false, 429, "Too Many Connections");
+        return;
+      }
 
       if (!options.validateSession) {
         callback(true);
@@ -114,10 +160,28 @@ export function attachWebSocketGateway(httpServer: HttpServer, options: WebSocke
     const ctx: ConnectionContext = { userId, connectionId };
 
     if (request.connectXSessionId) sessionBySocket.set(socket, request.connectXSessionId);
+    const state: ConnectionState = { alive: true, windowStart: Date.now(), framesInWindow: 0 };
+    stateBySocket.set(socket, state);
     registry.add(userId, connectionId, socket);
     options.onConnect?.(ctx);
 
+    socket.on("pong", () => {
+      state.alive = true;
+    });
+
     socket.on("message", (raw) => {
+      state.alive = true;
+      const now = Date.now();
+      if (now - state.windowStart >= RATE_WINDOW_MS) {
+        state.windowStart = now;
+        state.framesInWindow = 0;
+      }
+      state.framesInWindow += 1;
+      if (state.framesInWindow > maxFrames) {
+        // A flooding client (buggy or hostile) is disconnected; a normal client reconnects with backoff.
+        if (state.framesInWindow === maxFrames + 1) socket.close(RATE_LIMITED_CLOSE_CODE, "Rate limit exceeded");
+        return;
+      }
       void handleClientMessage(ctx, socket, raw.toString(), options).catch(() => {
         send(socket, { type: "error", message: "Failed to process message" });
       });
@@ -135,7 +199,39 @@ export function attachWebSocketGateway(httpServer: HttpServer, options: WebSocke
     });
   });
 
+  // Heartbeat: detects connections that died without a close frame (network
+  // drop, sleeping laptop), so their registry entries, presence and call
+  // bindings are cleaned up instead of lingering until the OS times out.
+  const heartbeat = setInterval(() => {
+    for (const socket of wss.clients) {
+      const state = stateBySocket.get(socket);
+      if (!state) continue;
+      if (!state.alive) {
+        socket.terminate();
+        continue;
+      }
+      state.alive = false;
+      try {
+        socket.ping();
+      } catch {
+        socket.terminate();
+      }
+    }
+  }, options.heartbeatIntervalMs ?? 30_000);
+  heartbeat.unref();
+
   return {
+    close() {
+      clearInterval(heartbeat);
+      for (const socket of wss.clients) socket.close(1001, "Server shutting down");
+      return new Promise<void>((resolve) => {
+        wss.close(() => resolve());
+        // Don't let a peer that never completes the close handshake hold up shutdown.
+        setTimeout(() => {
+          for (const socket of wss.clients) socket.terminate();
+        }, 2000).unref();
+      });
+    },
     sendToUser(userId: string, event: ServerEvent) {
       for (const socket of registry.getSockets(userId)) {
         send(socket, event);

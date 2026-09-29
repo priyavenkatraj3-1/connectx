@@ -4,6 +4,7 @@ import { AppError } from "../../middleware/errorHandler";
 import type { RealtimeGateway } from "../../realtime/gateway.interface";
 import { generateId } from "../../utils/id";
 import type { NotificationPreferenceKey, PreferencesService } from "../preferences/preferences.service";
+import { logger } from "../../utils/logger";
 
 export type NotificationType =
   | "mention"
@@ -138,7 +139,7 @@ export class NotificationsService {
       try {
         await channel.deliver(input.userId, notification);
       } catch (err) {
-        console.error(`[notification channel ${channel.name} failed]`, err);
+        logger.error(`[notification channel ${channel.name} failed]`, err);
       }
     }
     return notification;

@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
+import { useEscapeKey } from "../../hooks/useEscapeKey";
 import type { Priority } from "../../types/productivity";
 import { CloseIcon } from "../ui/icons";
 
@@ -31,6 +32,7 @@ export function PriorityBadge({ priority }: { priority: Priority }) {
 
 /** Modal shell matching the app's existing dialogs (NewGroupModal etc.). */
 export function Modal({ title, onClose, children, labelId }: { title: string; onClose(): void; children: ReactNode; labelId: string }) {
+  useEscapeKey(onClose);
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 p-4 pt-16" onClick={onClose}>
       <div
