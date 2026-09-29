@@ -59,6 +59,8 @@ interface EnvConfig {
   calls: {
     ringTimeoutMs: number;
   };
+  /** How often the Phase 6 scheduler checks for due reminders, tasks and scheduled messages. */
+  schedulerIntervalMs: number;
 }
 
 function readList(name: string): string[] {
@@ -135,4 +137,5 @@ export const env: EnvConfig = {
   calls: {
     ringTimeoutMs: Number(process.env.CALL_RING_TIMEOUT_SECONDS ?? 45) * 1000,
   },
+  schedulerIntervalMs: Math.max(5, Number(process.env.SCHEDULER_INTERVAL_SECONDS ?? 15)) * 1000,
 };

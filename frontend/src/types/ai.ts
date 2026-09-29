@@ -75,6 +75,9 @@ export interface AIAction {
   explanation: string | null;
   status: ActionStatus;
   confirmedAt: string | null;
+  /** Phase 6: set once you turned this suggestion into a task/reminder/event. Optional for older payloads. */
+  convertedTo?: "task" | "reminder" | "event" | null;
+  convertedId?: string | null;
   createdAt: string;
   updatedAt: string;
 }

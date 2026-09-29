@@ -32,8 +32,11 @@ function generateConnectionId(): string {
   });
 }
 
+/** Close code the server uses when this connection's session was signed out (see backend ws.server.ts). */
+const SESSION_REVOKED_CLOSE_CODE = 4401;
+
 export function RealtimeProvider({ children }: { children: ReactNode }) {
-  const { accessToken } = useAuth();
+  const { accessToken, sessionId, endLocalSession } = useAuth();
   const socketRef = useRef<WebSocket | null>(null);
   const listenersRef = useRef(new Set<Listener>());
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -61,8 +64,10 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         }
       };
 
-      socket.onclose = () => {
+      socket.onclose = (closeEvent?: CloseEvent) => {
         if (cancelled) return;
+        // Signed out from another device: don't reconnect with a dead token.
+        if (closeEvent?.code === SESSION_REVOKED_CLOSE_CODE) return;
         reconnectTimerRef.current = setTimeout(() => connect(token), RECONNECT_DELAY_MS);
       };
     }
@@ -79,8 +84,21 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
 
   const subscribe = useCallback((listener: Listener) => {
     listenersRef.current.add(listener);
-    return () => listenersRef.current.delete(listener);
+    return () => {
+      listenersRef.current.delete(listener);
+    };
   }, []);
+
+  // Phase 6: this device's session was signed out from another device.
+  useEffect(
+    () =>
+      subscribe((event) => {
+        if (event.type === "session:revoked" && sessionId && event.sessionId === sessionId) {
+          endLocalSession("This device was signed out from another device.");
+        }
+      }),
+    [subscribe, sessionId, endLocalSession]
+  );
 
   const send = useCallback((event: ClientEvent) => {
     const socket = socketRef.current;

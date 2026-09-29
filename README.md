@@ -166,6 +166,7 @@ ones:
 | `AI_PROVIDER` / `AI_PROVIDER_API_KEY` / `AI_MODEL` | AI provider: `none` (default — AI features report "not configured") or `anthropic`. See [docs/ai.md](docs/ai.md#configuration) |
 | `AI_RATE_LIMIT_PER_MINUTE` / `AI_RATE_LIMIT_PER_DAY` | Per-user AI request limits (default `10` / `200`) |
 | `TRANSCRIPTION_PROVIDER` / `TRANSCRIPTION_BASE_URL` | Speech-to-text for Voice Intelligence: `none` (default) or `whisper-http` |
+| `SCHEDULER_INTERVAL_SECONDS` | How often the in-process scheduler checks for due reminders, tasks and scheduled messages (default `15`, minimum `5`) |
 
 The frontend reads `VITE_API_BASE_URL` (defaults to
 `http://localhost:4000/api/v1`) and `VITE_WS_URL` (defaults to the same
@@ -195,6 +196,33 @@ npm run build
 
 ## Currently implemented features
 
+### Phase 6 — Advanced productivity & collaboration
+
+API reference: [docs/api.md](docs/api.md#productivity--collaboration-phase-6).
+
+- **Work page** (sidebar ✓): Tasks · Reminders · Events · Saved ·
+  Scheduled, with filters, sorting and search; everything is private to you
+- **Tasks / reminders / events from chat:** a message's ⋯ menu creates one
+  linked back to the message (the message is untouched); an AI suggestion
+  becomes one only when you ask. Times you type are read in your timezone
+- **Chat tools panel:** shared notes (with conflict detection), shared
+  to-do lists with assignees, and pinned messages — live for every member
+- **Pinned & saved messages:** pins are shared (admins-only in groups);
+  saves are private, with labels, stars and search
+- **Productivity Mode:** focused chats first, then unread; All/Unread/
+  Groups/Direct filters; per-type notification switches
+- **Scheduled messages:** the composer's 🕒 button; edit or cancel until
+  sent; you're notified if a send fails (e.g. you left the group)
+- **In-app notifications** (🔔): mentions, assignments, due tasks,
+  reminders, scheduled-send results, new sign-ins
+- **Devices:** Settings → Devices lists your signed-in sessions; rename
+  them, sign one out, or sign out all others — immediately, including
+  their live connections. Refresh tokens rotate on every use
+- **Offline:** recent chats stay readable offline; messages you write are
+  queued, shown as pending, and sent exactly once when you reconnect
+- **Business profile & quick replies:** Settings → Business; insert a
+  quick reply with ⚡ or by typing its `/shortcut`
+
 ### Phase 5 — AI features & privacy layer
 
 All opt-in (off by default), server-enforced, and labeled as AI-generated.
@@ -209,7 +237,8 @@ Details: [docs/ai.md](docs/ai.md).
 - **AI Memory:** explicit notes (typed, or "Remember" on a message) that you
   can view, delete or clear at any time — never extracted automatically
 - **Smart Actions:** suggested tasks/reminders/deadlines from a chat; you
-  confirm, edit or dismiss each one (nothing is scheduled yet)
+  confirm, edit or dismiss each one; from Phase 6 you can turn one into
+  a task, reminder or event on request
 - **Group Decision AI:** summary / decisions / open issues for a group, each
   item linked to supporting messages; no invented consensus
 - **Translation:** per message, on request; the original is never changed
@@ -293,7 +322,30 @@ Details: [docs/calls.md](docs/calls.md), [docs/status.md](docs/status.md).
 See [docs/api.md](docs/api.md) for every endpoint and event, and
 [docs/security.md](docs/security.md) for what's covered.
 
-## Known limitations (Phase 5)
+## Known limitations (Phase 6)
+
+Productivity & multi-device:
+
+- **Everyone must sign in again after upgrading to Phase 6** — tokens
+  issued earlier carry no session ID and are rejected.
+- **Offline is a foundation, not an offline-first app.** No service worker:
+  the app must already be loaded to keep working offline. Only the 20 most
+  recent chats (50 messages each) are cached, in unencrypted
+  `localStorage`. Only text messages can be queued — not attachments,
+  edits or deletes — and Phase 6 items (tasks, notes…) need a connection.
+- **Scheduler is in-process and single-instance**, checking every
+  `SCHEDULER_INTERVAL_SECONDS` (so reminders/sends can be up to that late);
+  nothing fires while the server is down (due items are sent on the next
+  start). Scheduled messages are text only.
+- **Notifications are in-app only** — no push, email or OS notifications.
+- **Events:** no recurrence, invitations or external calendar sync.
+  Reminders don't repeat or snooze.
+- **Shared notes are plain text** with whole-note saves; concurrent editors
+  get a conflict to resolve, not live co-editing.
+- **Business profiles are a foundation:** nothing verifies businesses
+  (all are `unverified`), and there are no catalogs, away messages or
+  automated replies.
+- Every authenticated request now does one indexed session lookup.
 
 AI (see [docs/ai.md](docs/ai.md#known-limitations)):
 
@@ -304,8 +356,7 @@ AI (see [docs/ai.md](docs/ai.md#known-limitations)):
 - Retrieval is keyword + recency, not semantic search. Requests are
   synchronous (no job queue). The per-minute AI limit is per process.
 - Scam heuristics are pattern-based (English-centric) and can be wrong both
-  ways; reports aren't reviewed yet. Confirmed actions don't create
-  reminders yet. No in-app voice recording.
+  ways; reports aren't reviewed yet. No in-app voice recording.
 - With a provider configured, selected chat content is sent to that
   provider (disclosed in Settings).
 
@@ -355,7 +406,7 @@ Carried over from Phase 3:
   older messages delivered; reading them still marks them read.
 - **Deleted messages** simply disappear from the thread (replies to them do
   show "Original message was deleted").
-- **Mentions** create no notifications (notifications aren't built yet).
+- **Mentions** create in-app notifications only (Phase 6) — no push.
 - **No end-to-end encryption** for any content, including media.
 - The UI is verified by component tests plus API/WebSocket tests — **not**
   by an automated browser run. Use the manual test scripts
@@ -363,9 +414,9 @@ Carried over from Phase 3:
 
 ## What's only scaffolded
 
-Notifications and general privacy settings persistence (`/privacy`)
-remain typed interfaces and route shapes only — routes
-honestly respond `501`, not fake data. (Status privacy *is* implemented,
+General privacy settings persistence (`/privacy`) remains a typed
+interface and route shape only — its routes honestly respond `501`, not
+fake data. (In-app notifications are implemented as of Phase 6.) (Status privacy *is* implemented,
 under `/statuses/privacy`.) Communities aren't started. See
 [docs/development-phases.md](docs/development-phases.md) for when each
 lands.
@@ -390,6 +441,7 @@ place today.
 - Phase 3 (three users, groups, roles, media): [docs/manual-testing-phase3.md](docs/manual-testing-phase3.md)
 - Phase 4 (two browser sessions, voice/video calls, status, privacy, expiry): [docs/manual-testing-phase4.md](docs/manual-testing-phase4.md)
 - Phase 5 (AI consent, each AI feature, unconfigured provider, limits): [docs/manual-testing-phase5.md](docs/manual-testing-phase5.md)
+- Phase 6 (tasks, shared notes/to-dos, pins, scheduling, notifications, devices, offline, business): [docs/manual-testing-phase6.md](docs/manual-testing-phase6.md)
 
 ## Planned phases
 
@@ -401,10 +453,13 @@ place today.
 4. **Calls & Status** ✅ — WebRTC voice/video calls, group
    call foundation, call history, status/stories with server-enforced
    privacy and expiry
-5. **AI Features & Privacy Layer** ✅ (this phase) — provider abstraction,
+5. **AI Features & Privacy Layer** ✅ — provider abstraction,
    consent, Ask Your Chats, memory, actions, group decisions, translation,
    scam shield, voice intelligence foundation
-6. **Multi-device, Scale & Productivity** — session management,
-   mobile/desktop clients, scaling, productivity tools
+6. **Advanced Productivity & Collaboration** ✅ (this phase) — tasks,
+   reminders, events, shared notes/to-dos, pins/saved, Productivity Mode,
+   scheduled messages, in-app notifications, multi-device sessions,
+   offline foundation, business profile & quick replies
+7. **Later** — horizontal scaling, native mobile/desktop clients
 
 Full detail: [docs/development-phases.md](docs/development-phases.md).

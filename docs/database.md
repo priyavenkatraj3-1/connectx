@@ -24,8 +24,8 @@ Two conventions worth knowing before reading the DDL:
 |---|---|
 | `users` | Core account: email, password hash, display name |
 | `user_profiles` | Optional profile data (avatar, bio, status, locale) — 1:1 with `users`, split out so hot auth queries don't touch rarely-changed profile fields |
-| `devices` | One row per device a user has logged in from — enables multi-device support and per-device sign-out |
-| `sessions` | One row per refresh-token-bearing login — enables server-side session revocation and "active sessions" UI |
+| `devices` | One row per device a user has logged in from — **used from Phase 6**: every login/signup creates one (name, platform, user-agent summary) |
+| `sessions` | One row per login — **used from Phase 6**: stores only a SHA-256 hash of the current refresh token (rotated on every refresh), `revoked_at`, `expires_at`, and `last_seen_at` (added in 005). Access tokens carry the session ID, so revoking a row signs that device out |
 
 ### Messaging
 
@@ -126,7 +126,7 @@ is `SET NULL`. See [calls.md](./calls.md).
 | `status_audience` | Per-status allow-list (`selected`) / deny-list (`except`) |
 | `status_views` | `PRIMARY KEY (status_id, viewer_id)` — one view record per user per status |
 | `status_privacy_settings` / `status_privacy_users` | A user's default status visibility and list |
-| `notifications` | Generic notification envelope with a `payload` JSONB column so new notification types don't require schema changes |
+| `notifications` | **Re-created in Phase 6** (the Phase 1 placeholder was never written to): in-app notifications with a `type` CHECK, `title`, `body`, a `payload` JSONB of navigation IDs only (never message text), `read_at`, and `UNIQUE (user_id, dedupe_key)` so scheduler-generated notifications are sent once |
 | `privacy_settings` | 1:1 with `users`; **also the AI consent record** (`ai_features_enabled`, `ai_memory_enabled`, and from Phase 5 `ai_chat_retrieval_enabled`, `ai_spam_shield_enabled`, `ai_voice_enabled`, `ai_preferred_language`, `ai_consented_at`) |
 
 ### AI (deliberately isolated, Phase 5)
@@ -142,6 +142,32 @@ Every AI table references its owning user `ON DELETE CASCADE`. See [ai.md](./ai.
 | `ai_message_flags` | Scam-warning dismiss/report per (user, message) |
 | `ai_voice_results` | Transcript / summary / action items per (user, audio attachment) |
 | `ai_usage` | Replaces `ai_conversations`. Metadata only (feature, provider, model, status, tokens, latency) — **never prompt or output text**. Also backs the daily AI limit |
+
+### Productivity, collaboration & organization (Phase 6)
+
+Private rows reference their owner `ON DELETE CASCADE`; references to a
+source conversation/message/AI suggestion are `ON DELETE SET NULL`, so
+deleting a message never deletes a task made from it.
+
+| Table | Purpose |
+|---|---|
+| `user_preferences` | Timezone (IANA), Productivity Mode, per-type notification switches. No row = defaults |
+| `focused_conversations` | Conversations a user pinned to the top in Productivity Mode |
+| `tasks` | Owner, optional assignee, status (`CHECK` ties `completed` ↔ `completed_at`), priority, due/reminder instants, source refs, `due_notified_at` (due notification sent once) |
+| `reminders` | Standalone or a task's reminder (unique `task_id`); `pending` → `fired` → `completed`/`dismissed`; partial index on pending `remind_at` for the scheduler |
+| `calendar_events` | Private events, `CHECK (ends_at >= starts_at)` |
+| `shared_notes` | Conversation-scoped notes with `edit_policy` and a `version` for optimistic concurrency |
+| `shared_todo_lists` / `shared_todo_items` | Conversation-scoped to-do lists; items with assignee, priority, due, completion |
+| `pinned_messages` | `PRIMARY KEY (conversation_id, message_id)`; cascades when the message is deleted |
+| `saved_messages` | Per-user saves with label, star, private note |
+| `scheduled_messages` | Text-only scheduled sends; `scheduled` → `sending` → `sent`/`failed`, or `cancelled`; `attempts`, `failure_reason`, `sent_message_id` |
+| `business_profiles` | 1:1 with `users`; `business_hours` JSONB (validated by the API); `verification_status` defaults to `unverified` and is not user-writable |
+| `quick_replies` | Owner's reply templates, `UNIQUE (user_id, shortcut)` |
+
+Also in 005: `messages.client_message_id` with a partial unique index on
+`(sender_id, client_message_id)` (offline-send idempotency), and
+`ai_actions.converted_to` / `converted_id` (a suggestion becomes at most
+one task/reminder/event).
 
 ## Why AI data is isolated
 
@@ -177,6 +203,7 @@ Three reasons, all deliberate:
 | `002_groups_media.sql` | 3 | `groups.updated_at`, `group_members.updated_at`, one-owner partial unique index, active-members index, `message_mentions`, reply index, attachment columns + indexes. Purely additive — no existing data is modified |
 | `003_calls_status.sql` | 4 | `call_sessions`, `call_participants`, `call_events`; `attachments.purpose` (default `message`) with `conversation_id` now nullable for status media (a `CHECK` keeps message attachments tied to a conversation); `statuses` dropped and re-created (never used before), `status_audience`, `status_views`, `status_privacy_settings`, `status_privacy_users`. Existing rows untouched |
 | `004_ai_layer.sql` | 5 | New `privacy_settings` AI columns; `ai_conversation_exclusions`, `ai_translations`, `ai_message_flags`, `ai_voice_results`, `ai_usage`. The never-used Phase 1 placeholders `ai_conversations`, `ai_memories`, `ai_actions` are dropped (`ai_memories`/`ai_actions` re-created). All other data untouched |
+| `005_productivity.sql` | 6 | `user_preferences`, `focused_conversations`, `tasks`, `reminders`, `calendar_events`, `shared_notes`, `shared_todo_lists`, `shared_todo_items`, `pinned_messages`, `saved_messages`, `scheduled_messages`, `business_profiles`, `quick_replies`; `messages.client_message_id` (+ partial unique index), `ai_actions.converted_to`/`converted_id`, `sessions.last_seen_at`. The never-used Phase 1 `notifications` placeholder is dropped and re-created. All other data untouched |
 
 Apply with `npm run db:migrate --workspace=backend` (idempotent; each file
 runs once, in its own transaction, recorded in `schema_migrations`).

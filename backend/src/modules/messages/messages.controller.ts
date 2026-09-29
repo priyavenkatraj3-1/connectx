@@ -17,7 +17,7 @@ export class MessagesController {
 
   send = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     const conversationId = req.params.conversationId as string;
-    const { body, replyToMessageId, mentionedUserIds, attachmentId } = req.body as SendMessageInput;
+    const { body, replyToMessageId, mentionedUserIds, attachmentId, clientMessageId } = req.body as SendMessageInput;
 
     const message = await this.messagesService.sendMessage({
       conversationId,
@@ -26,6 +26,7 @@ export class MessagesController {
       replyToMessageId,
       mentionedUserIds,
       attachmentId,
+      clientMessageId,
     });
     res.status(201).json({ message });
   };

@@ -1,6 +1,14 @@
+import type { BusinessProfileDTO, QuickReplyDTO } from "../modules/business/business.service";
 import type { CallDTO } from "../modules/calls/calls.types";
+import type { SharedNoteDTO } from "../modules/collaboration/notes.service";
+import type { TodoItemDTO, TodoListDTO } from "../modules/collaboration/todos.service";
 import type { GroupDTO, GroupRole } from "../modules/groups/groups.types";
 import type { MessageDTO, MessageStatus } from "../modules/messages/messages.types";
+import type { NotificationDTO } from "../modules/notifications/notifications.service";
+import type { PinnedMessageDTO, SavedMessageDTO } from "../modules/organization/organization.service";
+import type { UserPreferencesDTO } from "../modules/preferences/preferences.service";
+import type { CalendarEventDTO, ReminderDTO, TaskDTO } from "../modules/productivity/productivity.types";
+import type { ScheduledMessageDTO } from "../modules/scheduled-messages/scheduled-messages.service";
 
 /**
  * Server → client realtime events. Every event is a discriminated union on
@@ -83,6 +91,40 @@ export type ServerEvent =
   | { type: "ai:processing"; requestId: string; feature: string }
   | { type: "ai:completed"; requestId: string; feature: string }
   | { type: "ai:failed"; requestId: string; feature: string; code: string }
+  // --- Productivity & sync (Phase 6) ---
+  // Private items go only to the owner's devices (tasks also to their
+  // assignee); conversation-scoped items go to the conversation's active
+  // members. Each recipient gets a copy computed for *their* access.
+  | { type: "task:updated"; task: TaskDTO }
+  | { type: "task:deleted"; taskId: string }
+  /** A task's due time passed (a task_due notification was created as well). */
+  | { type: "task:due"; taskId: string }
+  | { type: "reminder:updated"; reminder: ReminderDTO }
+  | { type: "reminder:deleted"; reminderId: string }
+  | { type: "calendar_event:updated"; event: CalendarEventDTO }
+  | { type: "calendar_event:deleted"; eventId: string }
+  | { type: "note:updated"; conversationId: string; note: SharedNoteDTO }
+  | { type: "note:deleted"; conversationId: string; noteId: string }
+  | { type: "todo:list_updated"; conversationId: string; list: TodoListDTO }
+  | { type: "todo:list_deleted"; conversationId: string; listId: string }
+  | { type: "todo:item_updated"; conversationId: string; listId: string; item: TodoItemDTO }
+  | { type: "todo:item_deleted"; conversationId: string; listId: string; itemId: string }
+  | { type: "message:pinned"; conversationId: string; pin: PinnedMessageDTO }
+  | { type: "message:unpinned"; conversationId: string; messageId: string }
+  /** You saved/unsaved (or re-labeled/starred) a message on one of your devices. */
+  | { type: "saved:updated"; messageId: string; saved: SavedMessageDTO | null }
+  | { type: "scheduled_message:updated"; scheduledMessage: ScheduledMessageDTO }
+  | { type: "scheduled_message:deleted"; scheduledMessageId: string }
+  | { type: "notification:new"; notification: NotificationDTO }
+  | { type: "notification:read"; notificationIds: string[] | "all"; unreadCount: number }
+  | { type: "preferences:updated"; preferences: UserPreferencesDTO }
+  | { type: "focus:updated"; conversationIds: string[] }
+  | { type: "business:updated"; profile: BusinessProfileDTO | null }
+  | { type: "quick_replies:updated"; quickReplies: QuickReplyDTO[] }
+  /** Your device list changed (sign-in, rename, sign-out) — refetch it. */
+  | { type: "sessions:updated" }
+  /** A session was signed out. If it's yours, the server closes this connection right after. */
+  | { type: "session:revoked"; sessionId: string }
   | { type: "error"; message: string };
 
 export interface IceCandidatePayload {

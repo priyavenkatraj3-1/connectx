@@ -54,6 +54,9 @@ export interface AIActionDTO {
   explanation: string | null;
   status: ActionStatus;
   confirmedAt: Date | null;
+  /** Phase 6: the task/reminder/event the user created from this suggestion, if any. */
+  convertedTo: "task" | "reminder" | "event" | null;
+  convertedId: string | null;
   createdAt: Date;
   updatedAt: Date;
 }

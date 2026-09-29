@@ -5,15 +5,22 @@ import { type Container, type ContainerOverrides, createContainer } from "./cont
 import { env } from "./config/env";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler";
 import { apiRateLimiter } from "./middleware/rateLimiter";
+import { createSessionGuard } from "./middleware/requireAuth";
 import { createAIRouter } from "./modules/ai/ai.routes";
 import { createAuthRouter } from "./modules/auth/auth.routes";
+import { createBusinessRouter } from "./modules/business/business.routes";
 import { createCallsRouter } from "./modules/calls/calls.routes";
+import { createNotesRouter, createTodoRouters } from "./modules/collaboration/collaboration.routes";
 import { createConversationsRouter } from "./modules/conversations/conversations.routes";
 import { createGroupsRouter } from "./modules/groups/groups.routes";
 import { createMediaRouter } from "./modules/media/media.routes";
 import { createMessagesRouter } from "./modules/messages/messages.routes";
-import { notificationsRouter } from "./modules/notifications/notifications.routes";
+import { createNotificationsRouter } from "./modules/notifications/notifications.routes";
+import { createPinsRouter, createPreferencesRouter, createSavedRouter } from "./modules/organization/organization.routes";
 import { privacyRouter } from "./modules/privacy/privacy.routes";
+import { createEventsRouter, createRemindersRouter, createTasksRouter } from "./modules/productivity/productivity.routes";
+import { createScheduledMessagesRouter } from "./modules/scheduled-messages/scheduled-messages.routes";
+import { createSessionsRouter } from "./modules/sessions/sessions.routes";
 import { createStatusesRouter } from "./modules/statuses/statuses.routes";
 import { createUsersRouter } from "./modules/users/users.routes";
 
@@ -41,7 +48,12 @@ export function createApp(overrides: ContainerOverrides = {}): AppInstance {
   });
 
   const apiV1 = express.Router();
+  // Auth routes come before the session guard: logging out (or refreshing)
+  // must work even when the presented access token's session has ended.
   apiV1.use("/auth", createAuthRouter(container.authService));
+  // Phase 6: every other request's bearer token must belong to an active (not revoked) session.
+  apiV1.use(createSessionGuard(container.sessionsService));
+
   apiV1.use("/users", createUsersRouter(container.usersService));
   apiV1.use("/conversations", createConversationsRouter(container.conversationsService));
   apiV1.use("/messages", createMessagesRouter(container.messagesService, container.conversationsService));
@@ -49,9 +61,24 @@ export function createApp(overrides: ContainerOverrides = {}): AppInstance {
   apiV1.use("/media", createMediaRouter(container.mediaService, container.maxUploadBytes));
   apiV1.use("/calls", createCallsRouter(container.callsService));
   apiV1.use("/statuses", createStatusesRouter(container.statusesService));
-  apiV1.use("/notifications", notificationsRouter);
   apiV1.use("/privacy", privacyRouter);
   apiV1.use("/ai", createAIRouter(container.ai));
+
+  // --- Phase 6 ---
+  apiV1.use("/notifications", createNotificationsRouter(container.notificationsService));
+  apiV1.use("/sessions", createSessionsRouter(container.sessionsService));
+  apiV1.use("/preferences", createPreferencesRouter(container.preferencesService, container.conversationAccess));
+  apiV1.use("/tasks", createTasksRouter(container.tasksService));
+  apiV1.use("/reminders", createRemindersRouter(container.remindersService));
+  apiV1.use("/events", createEventsRouter(container.eventsService));
+  apiV1.use("/notes", createNotesRouter(container.notesService));
+  const todoRouters = createTodoRouters(container.todosService);
+  apiV1.use("/todo-lists", todoRouters.lists);
+  apiV1.use("/todo-items", todoRouters.items);
+  apiV1.use("/pins", createPinsRouter(container.organizationService));
+  apiV1.use("/saved", createSavedRouter(container.organizationService));
+  apiV1.use("/scheduled-messages", createScheduledMessagesRouter(container.scheduledMessagesService));
+  apiV1.use("/business", createBusinessRouter(container.businessService));
 
   app.use("/api/v1", apiV1);
 

@@ -13,5 +13,6 @@ export function buildGatewayOptions(container: Container): WebSocketGatewayOptio
     onCallEvent: (ctx, event) => container.callsService.handleClientEvent(ctx, event),
     onConnect: (ctx) => container.callsService.handleConnect(ctx),
     onDisconnect: (ctx) => container.callsService.handleDisconnect(ctx),
+    validateSession: (userId, sessionId) => container.sessionsService.isActive(userId, sessionId),
   };
 }

@@ -18,6 +18,7 @@ export const sendMessageSchema = z
     replyToMessageId: z.string().uuid("replyToMessageId must be a valid message ID").optional(),
     mentionedUserIds: mentionedUserIdsSchema,
     attachmentId: z.string().uuid("attachmentId must be a valid attachment ID").optional(),
+    clientMessageId: z.string().uuid("clientMessageId must be a UUID").optional(),
   })
   .refine((data) => (data.body !== undefined && data.body.length > 0) || data.attachmentId !== undefined, {
     message: "Message cannot be empty",

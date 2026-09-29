@@ -1,5 +1,5 @@
 import type { MessageDTO, MessagePage, SendMessageOptions } from "../types/message";
-import { apiRequest, buildQueryString } from "./apiClient";
+import { apiRequest, buildQueryString, generateUuid, NetworkError } from "./apiClient";
 
 export const messageService = {
   list(accessToken: string, conversationId: string, before?: string): Promise<MessagePage> {
@@ -17,14 +17,23 @@ export const messageService = {
     body: string,
     extras?: Omit<SendMessageOptions, "body">
   ): Promise<MessageDTO> {
-    const payload: SendMessageOptions = { ...extras };
+    // Phase 6: every send carries an idempotency key. If the network drops
+    // mid-request, the NetworkError carries the key so the offline outbox
+    // can retry with it — the server then returns the original message
+    // instead of posting a duplicate.
+    const payload: SendMessageOptions = { ...extras, clientMessageId: extras?.clientMessageId ?? generateUuid() };
     if (body) payload.body = body;
-    const { message } = await apiRequest<{ message: MessageDTO }>(`/messages/${conversationId}`, {
-      method: "POST",
-      body: payload,
-      accessToken,
-    });
-    return message;
+    try {
+      const { message } = await apiRequest<{ message: MessageDTO }>(`/messages/${conversationId}`, {
+        method: "POST",
+        body: payload,
+        accessToken,
+      });
+      return message;
+    } catch (err) {
+      if (err instanceof NetworkError) throw new NetworkError(err.message, payload.clientMessageId);
+      throw err;
+    }
   },
 
   async edit(

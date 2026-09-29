@@ -2,6 +2,8 @@ import { useState } from "react";
 import { NavLink, useParams } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 import { useConversations } from "../../context/ConversationsContext";
+import { useOptionalWorkspace } from "../../context/WorkspaceContext";
+import type { ConversationSummary } from "../../types/conversation";
 import { EmptyState } from "../common/EmptyState";
 import { ErrorState } from "../common/ErrorState";
 import { LoadingState } from "../common/LoadingState";
@@ -16,17 +18,39 @@ import {
   getConversationTitle,
 } from "../../utils/conversationDisplay";
 
+type ListFilter = "all" | "unread" | "groups" | "direct";
+
+const LIST_FILTERS: Array<{ id: ListFilter; label: string; test(c: ConversationSummary): boolean }> = [
+  { id: "all", label: "All", test: () => true },
+  { id: "unread", label: "Unread", test: (c) => c.unreadCount > 0 },
+  { id: "groups", label: "Groups", test: (c) => c.type === "group" },
+  { id: "direct", label: "Direct", test: (c) => c.type === "direct" },
+];
+
 export function ChatListPanel() {
   const { user } = useAuth();
-  const { conversations, isLoading, error, refresh } = useConversations();
+  const { conversations, isLoading, error, refresh, isShowingCached } = useConversations();
   const { conversationId: activeConversationId } = useParams();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isGroupModalOpen, setIsGroupModalOpen] = useState(false);
   const [filter, setFilter] = useState("");
+  const [view, setView] = useState<ListFilter>("all");
+  const workspace = useOptionalWorkspace();
 
-  const visible = conversations.filter((c) =>
-    getConversationTitle(c).toLowerCase().includes(filter.trim().toLowerCase())
-  );
+  const visible = conversations
+    .filter((c) => getConversationTitle(c).toLowerCase().includes(filter.trim().toLowerCase()))
+    .filter((c) => LIST_FILTERS.find((f) => f.id === view)!.test(c));
+
+  // Productivity Mode (Phase 6): the same conversations, grouped — focused first, then unread, then the rest. Nothing is hidden.
+  const productivityMode = !!workspace?.preferences?.productivityMode;
+  const focusedIds = new Set(workspace?.focusedConversationIds ?? []);
+  const sections: Array<{ title: string | null; items: typeof visible }> = productivityMode
+    ? [
+        { title: "Focused", items: visible.filter((c) => focusedIds.has(c.id)) },
+        { title: "Unread", items: visible.filter((c) => !focusedIds.has(c.id) && c.unreadCount > 0) },
+        { title: "Everything else", items: visible.filter((c) => !focusedIds.has(c.id) && c.unreadCount === 0) },
+      ].filter((section) => section.items.length > 0)
+    : [{ title: null, items: visible }];
 
   return (
     <div
@@ -70,6 +94,25 @@ export function ChatListPanel() {
             className="w-full rounded-lg border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-3 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 dark:border-slate-700 dark:bg-surface-dark-subtle"
           />
         </label>
+        {workspace && (
+          <div className="mt-2 flex items-center gap-1" role="group" aria-label="Conversation filters">
+            {LIST_FILTERS.map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                onClick={() => setView(option.id)}
+                aria-pressed={view === option.id}
+                className={`rounded-full px-2.5 py-1 text-xs font-medium ${
+                  view === option.id ? "bg-brand-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300"
+                }`}
+              >
+                {option.label}
+              </button>
+            ))}
+            {productivityMode && <span className="ml-auto text-[10px] font-semibold uppercase tracking-wide text-brand-600">Productivity</span>}
+          </div>
+        )}
+        {isShowingCached && <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">Offline — showing chats saved on this device.</p>}
       </div>
 
       <div className="flex flex-1 flex-col overflow-y-auto">
@@ -86,12 +129,17 @@ export function ChatListPanel() {
         )}
 
         {!isLoading && !error && visible.length === 0 && conversations.length > 0 && (
-          <EmptyState title="No matches" message={`No conversations match "${filter}".`} />
+          <EmptyState title="No matches" message={filter ? `No conversations match "${filter}".` : "No conversations match this filter."} />
         )}
 
         {!isLoading &&
           !error &&
-          visible.map((conversation) => {
+          sections.map((section) => (
+            <div key={section.title ?? "all"}>
+              {section.title && (
+                <p className="px-4 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wide text-slate-400">{section.title}</p>
+              )}
+              {section.items.map((conversation) => {
             const isActive = conversation.id === activeConversationId;
             const title = getConversationTitle(conversation);
             const preview = formatLastMessagePreview(conversation, conversation.lastMessage, user?.id);
@@ -126,7 +174,9 @@ export function ChatListPanel() {
                 </div>
               </NavLink>
             );
-          })}
+              })}
+            </div>
+          ))}
       </div>
 
       {isModalOpen && <NewConversationModal onClose={() => setIsModalOpen(false)} />}

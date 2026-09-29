@@ -17,6 +17,7 @@ interface MessageRow {
   created_at: Date;
   edited_at: Date | null;
   deleted_at: Date | null;
+  client_message_id: string | null;
 }
 
 /** Bare message row, without the joined/aggregated fields a MessageDTO carries. */
@@ -35,7 +36,7 @@ export interface MessageRecord {
 const SELECT_MESSAGE = `
   SELECT m.id, m.conversation_id, m.sender_id, u.display_name AS sender_display_name,
          p.avatar_url AS sender_avatar_url, m.content_type, m.body, m.reply_to_message_id,
-         m.created_at, m.edited_at, m.deleted_at
+         m.created_at, m.edited_at, m.deleted_at, m.client_message_id
   FROM messages m
   JOIN users u ON u.id = m.sender_id
   LEFT JOIN user_profiles p ON p.user_id = m.sender_id
@@ -105,13 +106,14 @@ export class MessagesRepository {
     replyToMessageId: string | null;
     mentionedUserIds: string[];
     attachmentId: string | null;
+    clientMessageId?: string | null;
   }): Promise<string> {
     const id = generateId();
     await this.db.withTransaction(async (tx) => {
       await tx.query(
-        `INSERT INTO messages (id, conversation_id, sender_id, content_type, body, reply_to_message_id)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [id, input.conversationId, input.senderId, input.contentType, input.body, input.replyToMessageId]
+        `INSERT INTO messages (id, conversation_id, sender_id, content_type, body, reply_to_message_id, client_message_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [id, input.conversationId, input.senderId, input.contentType, input.body, input.replyToMessageId, input.clientMessageId ?? null]
       );
 
       for (const userId of input.mentionedUserIds) {
@@ -157,6 +159,9 @@ export class MessagesRepository {
       await tx.query("DELETE FROM message_mentions WHERE message_id = $1", [messageId]);
       // A soft-deleted message keeps its row, so its cached translations must go explicitly (Phase 5).
       await tx.query("DELETE FROM ai_translations WHERE message_id = $1", [messageId]);
+      // Pins and saves point at content that no longer exists (Phase 6).
+      await tx.query("DELETE FROM pinned_messages WHERE message_id = $1", [messageId]);
+      await tx.query("DELETE FROM saved_messages WHERE message_id = $1", [messageId]);
       for (const attachment of attachments) {
         await this.mediaRepository.deleteById(attachment.id, tx);
       }
@@ -177,6 +182,16 @@ export class MessagesRepository {
       [messageId, userId]
     );
     return result.rows.length > 0;
+  }
+
+  /** The message a sender already created with this idempotency key, if any. */
+  async findIdByClientMessageId(senderId: string, clientMessageId: string): Promise<{ id: string; conversationId: string } | null> {
+    const result = await this.db.query<{ id: string; conversation_id: string }>(
+      "SELECT id, conversation_id FROM messages WHERE sender_id = $1 AND client_message_id = $2",
+      [senderId, clientMessageId]
+    );
+    const row = result.rows[0];
+    return row ? { id: row.id, conversationId: row.conversation_id } : null;
   }
 
   async findRecordById(messageId: string): Promise<MessageRecord | null> {
@@ -332,6 +347,7 @@ export class MessagesRepository {
       replyTo: row.reply_to_message_id ? (replies.get(row.reply_to_message_id) ?? null) : null,
       mentions: mentions.get(row.id) ?? [],
       attachment: attachmentByMessage.get(row.id) ?? null,
+      clientMessageId: row.client_message_id ?? null,
     }));
   }
 

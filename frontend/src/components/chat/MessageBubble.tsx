@@ -17,6 +17,10 @@ interface MessageBubbleProps {
   onDelete(message: MessageDTO): Promise<void>;
   /** Optional AI tools/results rendered inside the bubble (Phase 5); absent outside the app shell. */
   aiSlot?: ReactNode;
+  /** Phase 6: extra hover actions (the pin/save/task menu); absent outside the app shell. */
+  extraActions?: ReactNode;
+  /** Phase 6: small markers shown next to the time (e.g. pinned / saved). */
+  badges?: ReactNode;
 }
 
 function escapeRegExp(text: string): string {
@@ -57,6 +61,8 @@ export function MessageBubble({
   onEdit,
   onDelete,
   aiSlot,
+  extraActions,
+  badges,
 }: MessageBubbleProps) {
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -126,6 +132,7 @@ export function MessageBubble({
         <div
           className={`mt-1 flex items-center justify-end gap-1 text-[11px] ${isOwn ? "text-white/70" : "text-slate-400"}`}
         >
+          {badges}
           {message.editedAt && <span>edited ·</span>}
           <span>{formatMessageTime(message.createdAt)}</span>
           {isOwn && <MessageStatusTicks status={message.status} />}
@@ -173,6 +180,7 @@ export function MessageBubble({
               <TrashIcon width={16} height={16} />
             </button>
           )}
+          {extraActions}
         </div>
       )}
     </div>

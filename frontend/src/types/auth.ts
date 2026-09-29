@@ -12,6 +12,13 @@ export interface AuthTokens {
 export interface AuthResult {
   user: AuthUser;
   tokens: AuthTokens;
+  /** Phase 6: this sign-in's server-side session (one per device). */
+  session?: { id: string };
+}
+
+export interface DevicePayload {
+  name?: string;
+  platform?: "web" | "ios" | "android" | "desktop";
 }
 
 export interface SignupPayload {

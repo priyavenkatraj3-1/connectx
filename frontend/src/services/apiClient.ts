@@ -23,6 +23,34 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * The request never got an HTTP response (offline, DNS failure, server
+ * down, connection dropped). The server may or may not have processed it —
+ * callers that retry must use an idempotency key (see messageService.send).
+ */
+export class NetworkError extends Error {
+  constructor(
+    message = "You appear to be offline.",
+    /** Set by messageService.send so a retry can reuse the same idempotency key. */
+    public readonly clientMessageId?: string
+  ) {
+    super(message);
+  }
+}
+
+export function isNetworkError(err: unknown): err is NetworkError {
+  return err instanceof NetworkError;
+}
+
+/**
+ * Called when the server says this device's session has ended
+ * ("session_revoked" / "session_expired") — AuthContext signs out locally.
+ */
+let sessionEndedHandler: ((code: string) => void) | null = null;
+export function setSessionEndedHandler(handler: ((code: string) => void) | null): void {
+  sessionEndedHandler = handler;
+}
+
 interface RequestOptions {
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: unknown;
@@ -38,11 +66,17 @@ export async function apiRequest<TResponse>(path: string, options: RequestOption
     headers.Authorization = `Bearer ${options.accessToken}`;
   }
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    method: options.method ?? "GET",
-    headers,
-    body: options.body ? JSON.stringify(options.body) : undefined,
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      method: options.method ?? "GET",
+      headers,
+      body: options.body ? JSON.stringify(options.body) : undefined,
+    });
+  } catch (err) {
+    // fetch only rejects when no HTTP response arrived at all.
+    throw new NetworkError(err instanceof Error && err.message ? `Network error: ${err.message}` : undefined);
+  }
 
   if (response.status === 204) {
     return undefined as TResponse;
@@ -53,8 +87,20 @@ export async function apiRequest<TResponse>(path: string, options: RequestOption
   if (!response.ok) {
     const message = data?.error?.message ?? "Something went wrong. Please try again.";
     const code = typeof data?.error?.code === "string" ? (data.error.code as string) : undefined;
+    if (response.status === 401 && (code === "session_revoked" || code === "session_expired") && options.accessToken) {
+      sessionEndedHandler?.(code);
+    }
     throw new ApiError(message, response.status, code);
   }
 
   return data as TResponse;
+}
+
+/** RFC 4122 v4 UUID (crypto.randomUUID where available). */
+export function generateUuid(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    return (c === "x" ? r : (r & 0x3) | 0x8).toString(16);
+  });
 }

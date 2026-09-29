@@ -1,22 +1,39 @@
-import { useState, type ReactNode } from "react";
+import { type ReactNode } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 import { AISettingsPanel } from "../../components/ai/AISettingsPanel";
+import { BusinessSettings } from "../../components/settings/BusinessSettings";
+import { DevicesSettings, NotificationSettings, ProductivitySettings } from "../../components/settings/WorkspaceSettings";
 import { Avatar } from "../../components/ui/Avatar";
 import { useOptionalAI } from "../../context/AIContext";
+import { useOptionalWorkspace } from "../../context/WorkspaceContext";
 
-type SettingsSection = "account" | "privacy" | "ai" | "notifications";
+type SettingsSection = "account" | "privacy" | "productivity" | "notifications" | "devices" | "business" | "ai";
 
 const SECTIONS: Array<{ id: SettingsSection; label: string; description: string }> = [
   { id: "account", label: "Account", description: "Profile, email, and password" },
-  { id: "privacy", label: "Privacy & Security", description: "Visibility, sessions, devices" },
+  { id: "privacy", label: "Privacy & Security", description: "Visibility and read receipts" },
+  { id: "productivity", label: "Productivity", description: "Productivity Mode and timezone" },
+  { id: "notifications", label: "Notifications", description: "Mentions, reminders, tasks" },
+  { id: "devices", label: "Devices", description: "Signed-in devices and sessions" },
+  { id: "business", label: "Business", description: "Business profile and quick replies" },
   { id: "ai", label: "AI Features", description: "Assistant, memory, and consent" },
-  { id: "notifications", label: "Notifications", description: "Message and mention alerts" },
 ];
 
+function isSection(value: string | null): value is SettingsSection {
+  return SECTIONS.some((section) => section.id === value);
+}
+
 export function SettingsView() {
-  const [active, setActive] = useState<SettingsSection>("account");
+  const [params, setParams] = useSearchParams();
+  const requested = params.get("section");
+  const active: SettingsSection = isSection(requested) ? requested : "account";
+  const setActive = (section: SettingsSection) => setParams({ section });
   const { user } = useAuth();
   const ai = useOptionalAI();
+  // Phase 6 sections need the app shell's workspace (preferences, realtime sync).
+  const workspace = useOptionalWorkspace();
+  const insideAppOnly = <p className="text-sm text-slate-500 dark:text-slate-400">These settings are available inside the app.</p>;
 
   return (
     <div className="flex flex-1 overflow-hidden">
@@ -24,7 +41,7 @@ export function SettingsView() {
         <div className="px-6 py-4">
           <h1 className="text-xl font-semibold text-slate-900 dark:text-slate-100">Settings</h1>
         </div>
-        <nav className="flex flex-col gap-1 px-2">
+        <nav className="flex flex-col gap-1 overflow-y-auto px-2">
           {SECTIONS.map((section) => (
             <button
               key={section.id}
@@ -66,9 +83,14 @@ export function SettingsView() {
           <SettingsCard title="Privacy & Security">
             <SettingRow label="Last seen" description="Who can see when you were last online" comingSoon />
             <SettingRow label="Read receipts" description="Let others know when you've read their messages" comingSoon />
-            <SettingRow label="Active sessions" description="Review and sign out other devices" comingSoon />
+            <SettingRow label="Active sessions" description="Review and sign out other devices — see Devices" />
           </SettingsCard>
         )}
+
+        {active === "productivity" && <SettingsCard title="Productivity">{workspace ? <ProductivitySettings /> : insideAppOnly}</SettingsCard>}
+        {active === "notifications" && <SettingsCard title="Notifications">{workspace ? <NotificationSettings /> : insideAppOnly}</SettingsCard>}
+        {active === "devices" && <SettingsCard title="Devices">{workspace ? <DevicesSettings /> : insideAppOnly}</SettingsCard>}
+        {active === "business" && <SettingsCard title="Business">{workspace ? <BusinessSettings /> : insideAppOnly}</SettingsCard>}
 
         {active === "ai" && (
           <SettingsCard title="AI Features">
@@ -81,13 +103,6 @@ export function SettingsView() {
             ) : (
               <p className="text-sm text-slate-500 dark:text-slate-400">AI settings are available inside the app.</p>
             )}
-          </SettingsCard>
-        )}
-
-        {active === "notifications" && (
-          <SettingsCard title="Notifications">
-            <SettingRow label="Messages" description="Get notified about new messages" comingSoon />
-            <SettingRow label="Mentions" description="Get notified when someone mentions you in a group" comingSoon />
           </SettingsCard>
         )}
       </div>

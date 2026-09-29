@@ -6,20 +6,29 @@ import { ConversationAIPanel } from "../../components/ai/ConversationAIPanel";
 import { MessageAITools } from "../../components/ai/MessageAITools";
 import { MessageBubble } from "../../components/chat/MessageBubble";
 import { MessageComposer, type MentionCandidate } from "../../components/chat/MessageComposer";
+import { MessageMenu } from "../../components/chat/MessageMenu";
+import { OutboxBubbles } from "../../components/chat/OutboxBubbles";
+import { ConversationToolsPanel } from "../../components/collaboration/ConversationToolsPanel";
 import { ErrorState } from "../../components/common/ErrorState";
 import { LoadingState } from "../../components/common/LoadingState";
 import { GroupDetailsPanel } from "../../components/groups/GroupDetailsPanel";
+import { ItemFormModal, type ItemKind } from "../../components/productivity/ItemFormModal";
 import { Avatar } from "../../components/ui/Avatar";
-import { BackIcon, InfoIcon, PhoneIcon, SparkleIcon, VideoIcon } from "../../components/ui/icons";
+import { BackIcon, BookmarkIcon, InfoIcon, NoteIcon, PhoneIcon, PinIcon, SparkleIcon, StarIcon, VideoIcon } from "../../components/ui/icons";
 import { useOptionalAI } from "../../context/AIContext";
 import { useAuth } from "../../context/AuthContext";
 import { useOptionalCalls } from "../../context/CallContext";
 import { useConversations } from "../../context/ConversationsContext";
+import { useOptionalOffline } from "../../context/OfflineContext";
 import { useRealtime } from "../../context/RealtimeContext";
+import { useOptionalWorkspace } from "../../context/WorkspaceContext";
+import { useMessageOrganization } from "../../hooks/useMessageOrganization";
 import { useSafetyScan } from "../../hooks/useSafetyScan";
+import { isNetworkError } from "../../services/apiClient";
 import { callService } from "../../services/callService";
 import { groupService } from "../../services/groupService";
 import { messageService } from "../../services/messageService";
+import { scheduledMessageService } from "../../services/productivityService";
 import { isLiveCall, type CallDTO, type CallHistoryEntryDTO } from "../../types/call";
 import type { GroupDetails } from "../../types/group";
 import type { MessageDTO } from "../../types/message";
@@ -44,10 +53,19 @@ export function ChatConversationPage() {
   const [callHistory, setCallHistory] = useState<CallHistoryEntryDTO[]>([]);
   const [activeGroupCall, setActiveGroupCall] = useState<CallDTO | null>(null);
   const [isAIPanelOpen, setIsAIPanelOpen] = useState(false);
+  const [isToolsPanelOpen, setIsToolsPanelOpen] = useState(false);
+  const [creating, setCreating] = useState<{ kind: ItemKind; message: MessageDTO } | null>(null);
+  const [showingCachedMessages, setShowingCachedMessages] = useState(false);
   const scrollAnchorRef = useRef<HTMLDivElement>(null);
   const calls = useOptionalCalls();
   const ai = useOptionalAI();
+  // Phase 6 — all optional, so the page still renders on its own (e.g. in tests).
+  const workspace = useOptionalWorkspace();
+  const offline = useOptionalOffline();
+  const organization = useMessageOrganization(conversationId, !!workspace);
   const { findings: safetyFindings, markHandled: markFindingHandled } = useSafetyScan(conversationId, messages, user?.id);
+  const offlineCache = offline?.cache ?? null;
+  const [reloadKey, setReloadKey] = useState(0);
 
   const conversation = conversationId ? getConversation(conversationId) : undefined;
   const isGroup = conversation?.type === "group";
@@ -60,6 +78,8 @@ export function ChatConversationPage() {
     setRemovedReason(null);
     setIsGroupPanelOpen(false);
     setIsAIPanelOpen(false);
+    setIsToolsPanelOpen(false);
+    setCreating(null);
     setGroupDetails(null);
     setCallHistory([]);
     setActiveGroupCall(null);
@@ -71,6 +91,7 @@ export function ChatConversationPage() {
 
     setIsLoading(true);
     setError(null);
+    setShowingCachedMessages(false);
     messageService
       .list(accessToken, conversationId)
       .then((page) => {
@@ -79,8 +100,17 @@ export function ChatConversationPage() {
           setHasMoreHistory(page.hasMore);
         }
       })
-      .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load messages");
+      .catch(async (err) => {
+        // Offline (Phase 6): show the recent messages saved on this device, clearly labelled.
+        const cached = isNetworkError(err) ? await offlineCache?.loadMessages(conversationId) : null;
+        if (cancelled) return;
+        if (cached) {
+          setMessages(cached.items);
+          setHasMoreHistory(false);
+          setShowingCachedMessages(true);
+        } else {
+          setError(err instanceof Error ? err.message : "Failed to load messages");
+        }
       })
       .finally(() => {
         if (!cancelled) setIsLoading(false);
@@ -89,7 +119,28 @@ export function ChatConversationPage() {
     return () => {
       cancelled = true;
     };
-  }, [accessToken, conversationId]);
+  }, [accessToken, conversationId, offlineCache, reloadKey]);
+
+  // Keep this device's snapshot of the conversation current while online.
+  useEffect(() => {
+    if (!offlineCache || !conversationId || showingCachedMessages || isLoading || messages.length === 0) return;
+    void offlineCache.saveMessages(conversationId, messages);
+  }, [offlineCache, conversationId, messages, showingCachedMessages, isLoading]);
+
+  // Back online after showing cached messages: load the real history.
+  const isOnline = offline?.isOnline ?? true;
+  useEffect(() => {
+    if (isOnline && showingCachedMessages) setReloadKey((key) => key + 1);
+  }, [isOnline, showingCachedMessages]);
+
+  // A queued (offline) message was confirmed by the server — show the stored copy.
+  useEffect(() => {
+    if (!offline || !conversationId) return;
+    return offline.subscribeSent((item, message) => {
+      if (item.conversationId !== conversationId) return;
+      setMessages((prev) => (prev.some((m) => m.id === message.id) ? prev : [...prev, message]));
+    });
+  }, [offline, conversationId]);
 
   const loadGroupDetails = useCallback(async () => {
     if (!accessToken || !groupId) return;
@@ -187,10 +238,10 @@ export function ChatConversationPage() {
 
   // Mark newly-loaded/arrived messages as read while this conversation is open.
   useEffect(() => {
-    if (!conversationId || messages.length === 0 || removedReason) return;
+    if (!conversationId || messages.length === 0 || removedReason || showingCachedMessages) return;
     const lastMessage = messages[messages.length - 1]!;
     void markConversationRead(conversationId, lastMessage.id).catch(() => undefined);
-  }, [conversationId, messages, markConversationRead, removedReason]);
+  }, [conversationId, messages, markConversationRead, removedReason, showingCachedMessages]);
 
   useEffect(() => {
     scrollAnchorRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -243,9 +294,26 @@ export function ChatConversationPage() {
   const amInActiveGroupCall =
     !!activeGroupCall && activeGroupCall.participants.some((p) => p.userId === user?.id && p.state === "joined");
 
+  // Phase 6: mirrors the server rule (the server enforces it) — anyone in a direct chat, owner/admins in a group.
+  const canPin = !isGroup || groupDetails?.group.myRole === "owner" || groupDetails?.group.myRole === "admin";
+  const conversationMembers =
+    groupDetails?.members.map((m) => ({ userId: m.userId, displayName: m.displayName })) ??
+    (conversation?.otherParticipant ? [{ userId: conversation.otherParticipant.id, displayName: conversation.otherParticipant.displayName }] : []);
+  const isFocused = !!conversationId && !!workspace?.focusedConversationIds.includes(conversationId);
+  const outboxItems = offline && conversationId ? offline.outbox.filter((item) => item.conversationId === conversationId) : [];
+  const jumpToMessage = (messageId: string) => {
+    document.querySelector(`[data-message-id="${messageId}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  };
+  const scheduleMessage =
+    workspace && accessToken && conversationId
+      ? async (body: string, whenLocal: string) => {
+          await scheduledMessageService.create(accessToken, { conversationId, body, scheduledForLocal: whenLocal, timezone: workspace.timezone });
+        }
+      : undefined;
+
   return (
     <div className="flex flex-1 overflow-hidden">
-      <div className={`flex flex-1 flex-col ${isGroupPanelOpen || isAIPanelOpen ? "hidden md:flex" : "flex"}`}>
+      <div className={`flex flex-1 flex-col ${isGroupPanelOpen || isAIPanelOpen || isToolsPanelOpen ? "hidden md:flex" : "flex"}`}>
         <header className="flex items-center gap-3 border-b border-slate-200 px-5 py-3 dark:border-slate-800">
           <Link
             to="/app"
@@ -269,11 +337,40 @@ export function ChatConversationPage() {
           {calls && conversationId && !removedReason && (conversation?.type === "direct" || conversation?.type === "group") && (
             <CallButtons conversationId={conversationId} disabled={!!activeGroupCall} />
           )}
+          {workspace && conversationId && !removedReason && (
+            <>
+              <button
+                type="button"
+                onClick={() => void workspace.setFocused(conversationId, !isFocused).catch(() => undefined)}
+                className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 ${isFocused ? "text-amber-500" : "text-slate-500 dark:text-slate-400"}`}
+                aria-label={isFocused ? "Remove from focused conversations" : "Mark as focused conversation"}
+                aria-pressed={isFocused}
+                title="Focused conversations appear first in Productivity Mode"
+              >
+                <StarIcon fill={isFocused ? "currentColor" : "none"} />
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsGroupPanelOpen(false);
+                  setIsAIPanelOpen(false);
+                  setIsToolsPanelOpen((open) => !open);
+                }}
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+                aria-label="Chat tools"
+                aria-expanded={isToolsPanelOpen}
+                title="Pinned messages, shared notes, to-do lists, tasks and scheduled messages"
+              >
+                <NoteIcon />
+              </button>
+            </>
+          )}
           {ai && conversationId && !removedReason && (
             <button
               type="button"
               onClick={() => {
                 setIsGroupPanelOpen(false);
+                setIsToolsPanelOpen(false);
                 setIsAIPanelOpen((open) => !open);
               }}
               className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
@@ -288,6 +385,7 @@ export function ChatConversationPage() {
               type="button"
               onClick={() => {
                 setIsAIPanelOpen(false);
+                setIsToolsPanelOpen(false);
                 setIsGroupPanelOpen((open) => !open);
               }}
               className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
@@ -318,6 +416,11 @@ export function ChatConversationPage() {
         )}
 
         <div className="flex flex-1 flex-col overflow-y-auto px-5 py-4">
+          {showingCachedMessages && (
+            <p role="status" className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+              You’re offline. Showing the recent messages saved on this device — they may be out of date.
+            </p>
+          )}
           {isLoading && <LoadingState label="Loading messages…" />}
           {!isLoading && error && <ErrorState message={error} />}
 
@@ -358,9 +461,42 @@ export function ChatConversationPage() {
                     />
                   ) : undefined
                 }
+                badges={
+                  workspace && (organization.pinnedIds.has(item.message.id) || organization.saved.has(item.message.id)) ? (
+                    <>
+                      {organization.pinnedIds.has(item.message.id) && <PinIcon width={11} height={11} aria-label="Pinned" />}
+                      {organization.saved.get(item.message.id)?.starred ? (
+                        <StarIcon width={11} height={11} fill="currentColor" aria-label="Starred" />
+                      ) : (
+                        organization.saved.has(item.message.id) && <BookmarkIcon width={11} height={11} aria-label="Saved" />
+                      )}
+                    </>
+                  ) : undefined
+                }
+                extraActions={
+                  workspace && !removedReason && !showingCachedMessages ? (
+                    <MessageMenu
+                      isPinned={organization.pinnedIds.has(item.message.id)}
+                      canPin={canPin}
+                      isSaved={organization.saved.has(item.message.id)}
+                      isStarred={organization.saved.get(item.message.id)?.starred ?? false}
+                      onTogglePin={() => organization.togglePin(item.message.id)}
+                      onToggleSave={() => organization.toggleSave(item.message.id)}
+                      onToggleStar={() => organization.toggleStar(item.message.id)}
+                      onCreate={(kind) => setCreating({ kind, message: item.message })}
+                    />
+                  ) : undefined
+                }
               />
               )
             )}
+          {offline && (
+            <OutboxBubbles
+              items={outboxItems}
+              onRetry={(id) => void offline.retry(id)}
+              onDiscard={(id) => void offline.discard(id)}
+            />
+          )}
           <div ref={scrollAnchorRef} />
         </div>
 
@@ -381,6 +517,13 @@ export function ChatConversationPage() {
               onCancelEdit={() => setEditing(null)}
               onSent={handleSent}
               onEdited={handleEdited}
+              quickReplies={workspace?.quickReplies}
+              onSchedule={scheduleMessage}
+              offlineQueue={
+                offline
+                  ? { isOnline: offline.isOnline, queue: (input) => offline.queueMessage({ ...input, conversationId }) }
+                  : undefined
+              }
             />
           )
         )}
@@ -397,6 +540,28 @@ export function ChatConversationPage() {
 
       {isAIPanelOpen && ai && conversationId && !removedReason && (
         <ConversationAIPanel conversationId={conversationId} isGroup={isGroup} onClose={() => setIsAIPanelOpen(false)} />
+      )}
+
+      {isToolsPanelOpen && workspace && conversationId && !removedReason && (
+        <ConversationToolsPanel
+          key={conversationId}
+          conversationId={conversationId}
+          isGroup={isGroup}
+          canPin={canPin}
+          members={conversationMembers}
+          onJumpToMessage={jumpToMessage}
+          onClose={() => setIsToolsPanelOpen(false)}
+        />
+      )}
+
+      {creating && conversationId && (
+        <ItemFormModal
+          kind={creating.kind}
+          initial={{ title: (creating.message.body ?? "").slice(0, 200) }}
+          source={{ sourceMessageId: creating.message.id }}
+          assignees={creating.kind === "task" ? conversationMembers.filter((m) => m.userId !== user?.id) : []}
+          onClose={() => setCreating(null)}
+        />
       )}
     </div>
   );

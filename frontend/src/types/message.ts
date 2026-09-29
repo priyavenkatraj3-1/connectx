@@ -36,6 +36,8 @@ export interface MessageDTO {
   replyTo?: ReplyPreview | null;
   mentions?: MessageMention[];
   attachment?: AttachmentDTO | null;
+  /** Phase 6: the sender's idempotency key (matches an offline-queued message to the stored one). */
+  clientMessageId?: string | null;
 }
 
 export interface MessagePage {
@@ -48,4 +50,5 @@ export interface SendMessageOptions {
   replyToMessageId?: string;
   mentionedUserIds?: string[];
   attachmentId?: string;
+  clientMessageId?: string;
 }

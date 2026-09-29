@@ -101,6 +101,32 @@
   visible message; per-user AI rate limits; provider keys backend-only;
   usage log stores metadata only; AI results and status events go only to
   the requester.
+- **Server-side sessions (Phase 6)** — every login/signup creates a
+  `sessions` row; access tokens carry its ID and a guard in front of every
+  `/api/v1` router (except `/auth`) and the WebSocket handshake rejects
+  tokens of revoked/expired sessions. Refresh tokens rotate on every use
+  and only their SHA-256 hash is stored; presenting an already-rotated
+  refresh token is treated as a leak and revokes the session. Revoking a
+  device (or "sign out all other devices", or logout) takes effect on the
+  next request and closes that session's sockets (close code `4401`).
+  Sessions keep their original absolute expiry across refreshes.
+- **Productivity & collaboration (Phase 6)** — tasks, reminders, events,
+  saved messages, scheduled messages, notifications, preferences, business
+  profiles and quick replies are owner-scoped in every query (another
+  user's IDs return `404`); a task's assignee may only change its status.
+  Shared notes, to-do lists and pins require *active* membership of the
+  conversation, re-checked on every call; group pins and `admins`-policy
+  notes are limited to owners/admins. Creating anything from a message or
+  AI suggestion requires being able to read it; the message is never
+  modified and its excerpt disappears once it's deleted or unreadable.
+  Scheduled messages re-check membership at send time and go through the
+  normal send path. Notification payloads contain navigation IDs only,
+  never message text. Business `verificationStatus` can't be set by users —
+  every profile is honestly `unverified`.
+- **Offline storage (Phase 6)** — the browser caches recent conversations,
+  messages and unsent drafts in `localStorage`, namespaced per user;
+  signing in purges other accounts' offline data and signing out clears
+  your own. Tokens, attachments and AI data are never cached there.
 
 ## What is explicitly NOT implemented yet
 
@@ -115,9 +141,11 @@ none:
   PostgreSQL and transmitted over TLS only if you deploy behind TLS
   yourself (not configured in this repo). Do not describe ConnectX as
   E2E-encrypted until it demonstrably is.
-- **No server-side refresh-token revocation.** The `sessions` table exists
-  in the schema but nothing writes to it yet — a leaked refresh token is
-  valid until it expires. There is no "sign out other devices" yet.
+- **Offline data is not encrypted at rest.** Cached message text and
+  queued drafts sit in the browser's `localStorage` in plaintext; anyone
+  with access to the browser profile can read them.
+- **No new-device verification** — a new sign-in creates a `session_new`
+  notification on your other devices, but isn't blocked or confirmed.
 - **No CSRF protection** — irrelevant while there is no cookie-based
   session, but must be revisited if cookies are introduced later.
 - **No audit logging.**
@@ -157,10 +185,13 @@ none:
 
 ## Threat-model notes for later phases
 
-- Access tokens are stateless JWTs — a compromised access token is valid
-  until expiry with no way to revoke it early. Once `sessions` is actually
-  written to, add a revocation check (e.g. a `sessions.revoked_at` lookup)
-  to `requireAuth`.
+- Every authenticated request now does one indexed `sessions` lookup
+  (Phase 6). If that becomes a hot spot, cache active session IDs briefly
+  (accepting a short revocation delay) rather than dropping the check.
+- The Phase 6 scheduler runs in-process on a timer. Its claims are
+  single-statement `UPDATE … WHERE status = 'scheduled'`, and sends and
+  notifications are idempotent, but running several instances has not
+  been tested — use one scheduler instance until it has.
 - The WebSocket gateway tracks online users (and `CallsService` tracks
   call device bindings) in-process — `ConnectionRegistry` (see [architecture.md](./architecture.md)) — running
   multiple backend instances would need a shared registry/pub-sub before

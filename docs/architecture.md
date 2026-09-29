@@ -30,9 +30,18 @@ modules/
 ├── messages/         send, list, edit, delete, replies, @mentions, read receipts
 ├── groups/           group creation, metadata, membership, roles (Phase 3)
 ├── media/            upload validation, metadata, storage abstraction, authorized download (Phase 3)
-├── notifications/    in-app/push notification delivery — scaffolded, later phase
-├── ai/                 provider-agnostic AI feature interfaces — scaffolded, later phase
-└── privacy/           user-controlled privacy & AI-consent settings — scaffolded, later phase
+├── notifications/    in-app notifications, per-type preferences, de-duplication (Phase 6; push is later)
+├── ai/               AI provider abstraction and features (Phase 5)
+├── privacy/          general privacy settings — scaffolded, later phase
+│   Phase 6:
+├── sessions/         server-side sessions/devices, refresh rotation, revocation
+├── preferences/      timezone, Productivity Mode, notification switches, focused chats
+├── productivity/     tasks, reminders, calendar events (+ source-message resolution)
+├── collaboration/    shared notes, shared to-do lists, conversation-access checks
+├── organization/     pinned and saved messages
+├── scheduled-messages/  scheduled sends (delivered via MessagesService)
+├── scheduler/        in-process timer: due reminders, task-due notices, scheduled sends
+└── business/         business profile and quick replies (foundation)
 ```
 
 Every module follows the same internal shape where it applies:
@@ -52,8 +61,9 @@ Testing below) — see `backend/src/container.ts`.
 ## Why some modules are still interface-only
 
 `auth`, `users`, `conversations`, and `messages` are fully implemented as
-of Phase 2; `groups` and `media` as of Phase 3. `notifications`, `privacy`,
-and `ai` remain a service contract plus a router that honestly responds
+of Phase 2; `groups` and `media` as of Phase 3; `ai` as of Phase 5;
+`notifications` and the Phase 6 modules as of Phase 6. Only `privacy`
+remains a service contract plus a router that honestly responds
 `501 Not Implemented` — see `backend/src/utils/notImplemented.ts`. This
 keeps the shape of the system visible and reviewable without faking
 functionality that doesn't exist yet (no fabricated group data, no AI
@@ -264,14 +274,13 @@ the preview must change) trigger a quiet background refetch.
 
 ## Multi-device & scalability notes (forward-looking)
 
-- **Sessions & devices** are modeled as separate tables (`sessions`,
-  `devices`) from the start, so multi-device login and per-device sign-out
-  are schema-supported even though only single-session JWT auth exists so
-  far.
-- **Stateless access tokens** (short-lived JWT) plus **refresh tokens**
-  scoped to a session record are the intended long-term auth model — token
-  issuance/verification is implemented; refresh-token rotation and
-  server-side revocation are not yet.
+- **Sessions & devices** (Phase 6): every login creates a `devices` row
+  and a `sessions` row. Short-lived access JWTs carry the session ID and
+  are checked against it on every request and WebSocket handshake;
+  refresh tokens are scoped to the session, rotated on every use (hash
+  only stored), and revocation closes that session's sockets.
+- **Scheduler** (Phase 6) runs in-process on a timer alongside the status
+  sweep; like the connection registry, it assumes a single instance.
 - A user's realtime connections are tracked per-process, in memory
   (`ConnectionRegistry`) — and so are live-call device bindings and ring
   timers (`CallsService`). Running more than one backend instance behind a

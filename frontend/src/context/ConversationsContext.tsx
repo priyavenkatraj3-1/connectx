@@ -1,5 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { isNetworkError } from "../services/apiClient";
 import { conversationService } from "../services/conversationService";
+import { useOptionalOffline } from "./OfflineContext";
 import { messageService } from "../services/messageService";
 import type { ConversationSummary } from "../types/conversation";
 import type { MessageDTO } from "../types/message";
@@ -16,6 +18,8 @@ interface ConversationsContextValue {
   markConversationRead(conversationId: string, upToMessageId: string): Promise<void>;
   /** Drops a conversation locally (e.g. right after leaving a group), without waiting for the server event. */
   removeConversation(conversationId: string): void;
+  /** True while showing the list saved on this device because the server is unreachable (Phase 6). */
+  isShowingCached: boolean;
 }
 
 const ConversationsContext = createContext<ConversationsContextValue | undefined>(undefined);
@@ -46,6 +50,10 @@ export function ConversationsProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const offline = useOptionalOffline();
+  const cache = offline?.cache ?? null;
+  const [isShowingCached, setIsShowingCached] = useState(false);
+
   const refresh = useCallback(async () => {
     if (!accessToken) return;
     setIsLoading(true);
@@ -53,26 +61,44 @@ export function ConversationsProvider({ children }: { children: ReactNode }) {
     try {
       const list = await conversationService.list(accessToken);
       setConversations(list);
+      setIsShowingCached(false);
+      void cache?.saveConversations(list);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load conversations");
+      // Offline (Phase 6): fall back to the list saved on this device, if any.
+      const cached = isNetworkError(err) ? await cache?.loadConversations() : null;
+      if (cached) {
+        setConversations(cached.items);
+        setIsShowingCached(true);
+      } else {
+        setError(err instanceof Error ? err.message : "Failed to load conversations");
+      }
     } finally {
       setIsLoading(false);
     }
-  }, [accessToken]);
+  }, [accessToken, cache]);
 
   /** Re-fetches without flipping the list into its loading state (for background updates). */
   const refreshQuietly = useCallback(async () => {
     if (!accessToken) return;
     try {
-      setConversations(await conversationService.list(accessToken));
+      const list = await conversationService.list(accessToken);
+      setConversations(list);
+      setIsShowingCached(false);
+      void cache?.saveConversations(list);
     } catch {
       // Keep showing the current list; the next event or manual refresh will retry.
     }
-  }, [accessToken]);
+  }, [accessToken, cache]);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // Back online after showing a cached list: fetch the real one.
+  const isOnline = offline?.isOnline ?? true;
+  useEffect(() => {
+    if (isOnline && isShowingCached) void refreshQuietly();
+  }, [isOnline, isShowingCached, refreshQuietly]);
 
   useEffect(() => {
     return subscribe((event) => {
@@ -116,6 +142,8 @@ export function ConversationsProvider({ children }: { children: ReactNode }) {
 
         case "conversation:removed":
           setConversations((prev) => prev.filter((c) => c.id !== event.conversationId));
+          // No longer a member: don't keep its messages on this device.
+          void cache?.forgetConversation(event.conversationId);
           break;
 
         case "conversation:unread":
@@ -155,7 +183,7 @@ export function ConversationsProvider({ children }: { children: ReactNode }) {
           break;
       }
     });
-  }, [subscribe, refreshQuietly, user?.id]);
+  }, [subscribe, refreshQuietly, user?.id, cache]);
 
   const markConversationRead = useCallback(
     async (conversationId: string, upToMessageId: string) => {
@@ -187,8 +215,9 @@ export function ConversationsProvider({ children }: { children: ReactNode }) {
       getConversation,
       markConversationRead,
       removeConversation,
+      isShowingCached,
     }),
-    [conversations, isLoading, error, refresh, totalUnreadCount, getConversation, markConversationRead, removeConversation]
+    [conversations, isLoading, error, refresh, totalUnreadCount, getConversation, markConversationRead, removeConversation, isShowingCached]
   );
 
   return <ConversationsContext.Provider value={value}>{children}</ConversationsContext.Provider>;

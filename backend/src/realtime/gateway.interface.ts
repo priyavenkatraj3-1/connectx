@@ -17,6 +17,11 @@ export interface RealtimeGateway {
   sendToConnection(userId: string, connectionId: string, event: ServerEvent): boolean;
   /** True if `connectionId` is a currently open connection belonging to `userId`. */
   hasConnection(userId: string, connectionId: string): boolean;
+  /**
+   * Closes every open connection authenticated with `sessionId` (Phase 6
+   * session revocation). Optional so test fakes needn't implement it.
+   */
+  disconnectSession?(userId: string, sessionId: string): void;
 }
 
 /** Gateway that does nothing — used when no live WebSocket server is attached (e.g. plain HTTP-only tests). */
@@ -25,4 +30,5 @@ export const noopRealtimeGateway: RealtimeGateway = {
   isUserOnline: () => false,
   sendToConnection: () => false,
   hasConnection: () => false,
+  disconnectSession: () => undefined,
 };

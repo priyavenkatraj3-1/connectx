@@ -28,7 +28,21 @@ import { MediaService } from "./modules/media/media.service";
 import { LocalDiskStorageProvider } from "./modules/media/storage/local-disk.storage";
 import type { StorageProvider } from "./modules/media/storage/storage-provider.interface";
 import { MessagesRepository } from "./modules/messages/messages.repository";
-import { MessagesService } from "./modules/messages/messages.service";
+import { MessagesService, type MentionNotifier } from "./modules/messages/messages.service";
+import { BusinessService } from "./modules/business/business.service";
+import { ConversationAccessService } from "./modules/collaboration/conversation-access";
+import { SharedNotesService } from "./modules/collaboration/notes.service";
+import { SharedTodosService } from "./modules/collaboration/todos.service";
+import { NotificationsService } from "./modules/notifications/notifications.service";
+import { MessageOrganizationService } from "./modules/organization/organization.service";
+import { PreferencesService } from "./modules/preferences/preferences.service";
+import { EventsService } from "./modules/productivity/events.service";
+import { RemindersService } from "./modules/productivity/reminders.service";
+import { SourceResolver } from "./modules/productivity/source";
+import { TasksService } from "./modules/productivity/tasks.service";
+import { ScheduledMessagesService } from "./modules/scheduled-messages/scheduled-messages.service";
+import { SchedulerService } from "./modules/scheduler/scheduler.service";
+import { SessionsService } from "./modules/sessions/sessions.service";
 import { StatusesRepository } from "./modules/statuses/statuses.repository";
 import { StatusesService } from "./modules/statuses/statuses.service";
 import { UsersRepository } from "./modules/users/users.repository";
@@ -80,6 +94,20 @@ export interface Container {
   callsService: CallsService;
   statusesService: StatusesService;
   ai: AIServices;
+  // --- Phase 6 ---
+  conversationAccess: ConversationAccessService;
+  preferencesService: PreferencesService;
+  notificationsService: NotificationsService;
+  sessionsService: SessionsService;
+  tasksService: TasksService;
+  remindersService: RemindersService;
+  eventsService: EventsService;
+  notesService: SharedNotesService;
+  todosService: SharedTodosService;
+  organizationService: MessageOrganizationService;
+  scheduledMessagesService: ScheduledMessagesService;
+  businessService: BusinessService;
+  schedulerService: SchedulerService;
 }
 
 /**
@@ -101,10 +129,17 @@ export function createContainer(overrides: ContainerOverrides = {}): Container {
     sendToConnection: (userId, connectionId, event) =>
       realtimeGatewayRef.current.sendToConnection(userId, connectionId, event),
     hasConnection: (userId, connectionId) => realtimeGatewayRef.current.hasConnection(userId, connectionId),
+    disconnectSession: (userId, sessionId) => realtimeGatewayRef.current.disconnectSession?.(userId, sessionId),
   };
 
+  // Phase 6 building blocks used by several modules below.
+  const conversationAccess = new ConversationAccessService(db);
+  const preferencesService = new PreferencesService(db, delegatingGateway);
+  const notificationsService = new NotificationsService(db, delegatingGateway, preferencesService);
+  const sessionsService = new SessionsService(db, delegatingGateway);
+
   const userRepository = new PostgresUserRepository(db);
-  const authService = new AuthService(userRepository);
+  const authService = new AuthService(userRepository, sessionsService, notificationsService);
 
   const usersRepository = new UsersRepository(db);
   const usersService = new UsersService(usersRepository);
@@ -119,7 +154,8 @@ export function createContainer(overrides: ContainerOverrides = {}): Container {
     conversationsRepository,
     delegatingGateway,
     mediaRepository,
-    storage
+    storage,
+    createMentionNotifier(db, notificationsService)
   );
 
   const groupsRepository = new GroupsRepository(db);
@@ -187,6 +223,32 @@ export function createContainer(overrides: ContainerOverrides = {}): Container {
     ),
   };
 
+  const sourceResolver = new SourceResolver(db, conversationAccess);
+  const remindersService = new RemindersService(db, delegatingGateway, preferencesService, sourceResolver);
+  const tasksService = new TasksService(
+    db,
+    delegatingGateway,
+    conversationAccess,
+    preferencesService,
+    sourceResolver,
+    remindersService,
+    notificationsService
+  );
+  const eventsService = new EventsService(db, delegatingGateway, preferencesService, sourceResolver);
+  const notesService = new SharedNotesService(db, delegatingGateway, conversationAccess);
+  const todosService = new SharedTodosService(db, delegatingGateway, conversationAccess, notificationsService);
+  const organizationService = new MessageOrganizationService(db, delegatingGateway, conversationAccess);
+  const scheduledMessagesService = new ScheduledMessagesService(
+    db,
+    delegatingGateway,
+    conversationAccess,
+    preferencesService,
+    messagesService,
+    notificationsService
+  );
+  const businessService = new BusinessService(db, delegatingGateway);
+  const schedulerService = new SchedulerService(db, delegatingGateway, notificationsService, remindersService, scheduledMessagesService);
+
   return {
     db,
     realtimeGatewayRef,
@@ -201,5 +263,38 @@ export function createContainer(overrides: ContainerOverrides = {}): Container {
     callsService,
     statusesService,
     ai,
+    conversationAccess,
+    preferencesService,
+    notificationsService,
+    sessionsService,
+    tasksService,
+    remindersService,
+    eventsService,
+    notesService,
+    todosService,
+    organizationService,
+    scheduledMessagesService,
+    businessService,
+    schedulerService,
+  };
+}
+
+/** @mention → in-app notification for each mentioned member (respecting their notification preference). No message text is stored. */
+function createMentionNotifier(db: DatabaseClient, notifications: NotificationsService): MentionNotifier {
+  return async ({ conversationId, conversationType, messageId, senderName, mentionedUserIds }) => {
+    let where = "";
+    if (conversationType === "group") {
+      const group = await db.query<{ name: string }>("SELECT name FROM groups WHERE conversation_id = $1", [conversationId]);
+      if (group.rows[0]) where = ` in ${group.rows[0].name}`;
+    }
+    for (const userId of mentionedUserIds) {
+      await notifications.notify({
+        userId,
+        type: "mention",
+        title: `${senderName} mentioned you${where}`,
+        payload: { conversationId, messageId },
+        dedupeKey: `mention:${messageId}`,
+      });
+    }
   };
 }

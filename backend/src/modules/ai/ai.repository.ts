@@ -58,6 +58,8 @@ interface ActionRow {
   explanation: string | null;
   status: ActionStatus;
   confirmed_at: Date | null;
+  converted_to: "task" | "reminder" | "event" | null;
+  converted_id: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -141,6 +143,8 @@ function toAction(row: ActionRow): AIActionDTO {
     explanation: row.explanation,
     status: row.status,
     confirmedAt: row.confirmed_at,
+    convertedTo: row.converted_to ?? null,
+    convertedId: row.converted_id ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

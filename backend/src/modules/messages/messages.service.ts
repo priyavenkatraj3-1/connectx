@@ -1,4 +1,5 @@
 import type { MessageService } from "./message.interface";
+import { isUniqueViolation } from "../../db/errors";
 import { AppError } from "../../middleware/errorHandler";
 import { broadcast } from "../../realtime/broadcast";
 import type { RealtimeGateway } from "../../realtime/gateway.interface";
@@ -18,14 +19,41 @@ const CONTENT_TYPE_BY_KIND = {
   file: "file",
 } as const;
 
+/** Told about each @mention after a message is stored (Phase 6 notifications). Failures never affect sending. */
+export type MentionNotifier = (input: {
+  conversationId: string;
+  conversationType: "direct" | "group";
+  messageId: string;
+  senderId: string;
+  senderName: string;
+  mentionedUserIds: string[];
+}) => Promise<void>;
+
 export class MessagesService implements MessageService {
   constructor(
     private readonly messagesRepository: MessagesRepository,
     private readonly conversationsRepository: ConversationsRepository,
     private readonly realtimeGateway: RealtimeGateway,
     private readonly mediaRepository: MediaRepository,
-    private readonly storage: StorageProvider
+    private readonly storage: StorageProvider,
+    private readonly mentionNotifier?: MentionNotifier
   ) {}
+
+  /**
+   * Idempotent-send lookup: if this sender already stored a message with
+   * this clientMessageId, return it (a retried offline send must not post
+   * twice). The key is only valid in the conversation it was first used in.
+   */
+  private async findExistingByClientId(input: SendMessageParams): Promise<MessageDTO | null> {
+    if (!input.clientMessageId) return null;
+    const existing = await this.messagesRepository.findIdByClientMessageId(input.senderId, input.clientMessageId);
+    if (!existing) return null;
+    if (existing.conversationId !== input.conversationId) {
+      throw new AppError("clientMessageId was already used in another conversation", 409);
+    }
+    const members = await this.conversationsRepository.getActiveMembers(input.conversationId);
+    return this.messagesRepository.findById(existing.id, members);
+  }
 
   private async requireMembership(conversationId: string, userId: string): Promise<ActiveMembership> {
     const membership = await this.conversationsRepository.getActiveMembership(conversationId, userId);
@@ -53,6 +81,8 @@ export class MessagesService implements MessageService {
     const conversation = await this.conversationsRepository.getById(input.conversationId);
     if (!conversation) throw new AppError("Conversation not found", 404);
     await this.requireMembership(input.conversationId, input.senderId);
+    const duplicate = await this.findExistingByClientId(input);
+    if (duplicate) return duplicate;
     const members = await this.conversationsRepository.getActiveMembers(input.conversationId);
 
     const body = input.body && input.body.length > 0 ? input.body : null;
@@ -99,9 +129,15 @@ export class MessagesService implements MessageService {
         replyToMessageId,
         mentionedUserIds,
         attachmentId: input.attachmentId ?? null,
+        clientMessageId: input.clientMessageId ?? null,
       });
     } catch (err) {
       if (err instanceof AttachmentUnavailableError) throw new AppError("Attachment has already been sent", 409);
+      // Two concurrent retries with the same key: the loser returns the winner's message.
+      if (isUniqueViolation(err) && input.clientMessageId) {
+        const winner = await this.findExistingByClientId(input);
+        if (winner) return winner;
+      }
       throw err;
     }
     await this.conversationsRepository.touchUpdatedAt(input.conversationId);
@@ -136,6 +172,17 @@ export class MessagesService implements MessageService {
     broadcast(this.realtimeGateway, recipientIds, { type: "message:new", conversationId: input.conversationId, message });
     // Echo to the sender's own other connections (multi-tab/multi-device sync).
     this.realtimeGateway.sendToUser(input.senderId, { type: "message:new", conversationId: input.conversationId, message });
+
+    if (mentionedUserIds.length > 0 && this.mentionNotifier) {
+      await this.mentionNotifier({
+        conversationId: input.conversationId,
+        conversationType: conversation.type,
+        messageId,
+        senderId: input.senderId,
+        senderName: message.sender.displayName,
+        mentionedUserIds,
+      }).catch((err) => console.error("[mention notification failed]", err));
+    }
 
     return message;
   }

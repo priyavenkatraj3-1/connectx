@@ -48,6 +48,15 @@ async function main(): Promise<void> {
   sweepStatuses();
   setInterval(sweepStatuses, STATUS_SWEEP_INTERVAL_MS).unref();
 
+  // Phase 6 scheduler: reminders, task-due notifications, scheduled messages.
+  // Scheduled messages left mid-send by a crash are safe to retry (sends are idempotent).
+  const stuck = await container.scheduledMessagesService.recoverStuck();
+  if (stuck > 0) console.log(`Re-queued ${stuck} scheduled message(s) interrupted by the last shutdown.`);
+  const runScheduler = () =>
+    void container.schedulerService.tick().catch((err) => console.error("[scheduler tick failed]", err));
+  runScheduler();
+  setInterval(runScheduler, env.schedulerIntervalMs).unref();
+
   httpServer.listen(env.port, () => {
     console.log(`ConnectX backend listening on port ${env.port} [${env.nodeEnv}]`);
     console.log(`WebSocket gateway available at ws://localhost:${env.port}${WS_PATH}`);

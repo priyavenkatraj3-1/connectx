@@ -28,13 +28,22 @@ export interface WebSocketGatewayOptions {
   onCallEvent?: (ctx: ConnectionContext, event: CallClientEvent) => Promise<void>;
   onConnect?: (ctx: ConnectionContext) => void;
   onDisconnect?: (ctx: ConnectionContext) => void;
+  /**
+   * Phase 6: checks that the token's session hasn't been revoked. When
+   * provided, tokens without a session ID are rejected too.
+   */
+  validateSession?: (userId: string, sessionId: string) => Promise<boolean>;
 }
 
 interface AuthenticatedUpgradeRequest {
   url?: string;
   connectXUserId?: string;
   connectXConnectionId?: string;
+  connectXSessionId?: string;
 }
+
+/** Close code sent to a connection whose session was signed out. */
+export const SESSION_REVOKED_CLOSE_CODE = 4401;
 
 /**
  * Attaches a WebSocket server to the given HTTP server at WS_PATH and
@@ -52,6 +61,7 @@ interface AuthenticatedUpgradeRequest {
  */
 export function attachWebSocketGateway(httpServer: HttpServer, options: WebSocketGatewayOptions): RealtimeGateway {
   const registry = new ConnectionRegistry();
+  const sessionBySocket = new WeakMap<WebSocket, string>();
 
   const wss = new WebSocketServer({
     server: httpServer,
@@ -66,17 +76,31 @@ export function attachWebSocketGateway(httpServer: HttpServer, options: WebSocke
       const url = new URL(req.url ?? "", "http://localhost");
       const token = url.searchParams.get("token");
 
+      let payload: ReturnType<typeof verifyAccessToken>;
       try {
         if (!token) throw new Error("missing token");
-        const userId = verifyAccessToken(token).userId;
-        req.connectXUserId = userId;
-
-        const requestedCid = url.searchParams.get("cid")?.toLowerCase();
-        req.connectXConnectionId = requestedCid && UUID_PATTERN.test(requestedCid) ? requestedCid : generateId();
-        callback(true);
+        payload = verifyAccessToken(token);
       } catch {
         callback(false, 401, "Unauthorized");
+        return;
       }
+      req.connectXUserId = payload.userId;
+      req.connectXSessionId = payload.sid;
+      const requestedCid = url.searchParams.get("cid")?.toLowerCase();
+      req.connectXConnectionId = requestedCid && UUID_PATTERN.test(requestedCid) ? requestedCid : generateId();
+
+      if (!options.validateSession) {
+        callback(true);
+        return;
+      }
+      if (!payload.sid) {
+        callback(false, 401, "Unauthorized");
+        return;
+      }
+      options.validateSession(payload.userId, payload.sid).then(
+        (active) => (active ? callback(true) : callback(false, 401, "Unauthorized")),
+        () => callback(false, 401, "Unauthorized")
+      );
     },
   });
 
@@ -89,6 +113,7 @@ export function attachWebSocketGateway(httpServer: HttpServer, options: WebSocke
     }
     const ctx: ConnectionContext = { userId, connectionId };
 
+    if (request.connectXSessionId) sessionBySocket.set(socket, request.connectXSessionId);
     registry.add(userId, connectionId, socket);
     options.onConnect?.(ctx);
 
@@ -128,6 +153,12 @@ export function attachWebSocketGateway(httpServer: HttpServer, options: WebSocke
     hasConnection(userId: string, connectionId: string) {
       const socket = registry.getSocket(userId, connectionId);
       return !!socket && socket.readyState === socket.OPEN;
+    },
+    disconnectSession(userId: string, sessionId: string) {
+      for (const socket of registry.getSockets(userId)) {
+        // close() is queued after already-sent frames, so a preceding session:revoked event still arrives.
+        if (sessionBySocket.get(socket) === sessionId) socket.close(SESSION_REVOKED_CLOSE_CODE, "Session revoked");
+      }
     },
   };
 }

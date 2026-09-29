@@ -1,6 +1,21 @@
 import type { CallDTO, IceCandidatePayload } from "./call";
 import type { GroupDTO, GroupRole } from "./group";
 import type { MessageDTO, MessageStatus } from "./message";
+import type {
+  AppNotification,
+  BusinessProfile,
+  CalendarEvent,
+  PinnedMessage,
+  QuickReply,
+  Reminder,
+  SavedMessage,
+  ScheduledMessage,
+  SharedNote,
+  Task,
+  TodoItem,
+  TodoList,
+  UserPreferences,
+} from "./productivity";
 
 /** Mirrors backend/src/realtime/events.ts — keep the two in sync. */
 export type ServerEvent =
@@ -48,6 +63,33 @@ export type ServerEvent =
   | { type: "ai:processing"; requestId: string; feature: string }
   | { type: "ai:completed"; requestId: string; feature: string }
   | { type: "ai:failed"; requestId: string; feature: string; code: string }
+  // --- Productivity & sync (Phase 6) ---
+  | { type: "task:updated"; task: Task }
+  | { type: "task:deleted"; taskId: string }
+  | { type: "task:due"; taskId: string }
+  | { type: "reminder:updated"; reminder: Reminder }
+  | { type: "reminder:deleted"; reminderId: string }
+  | { type: "calendar_event:updated"; event: CalendarEvent }
+  | { type: "calendar_event:deleted"; eventId: string }
+  | { type: "note:updated"; conversationId: string; note: SharedNote }
+  | { type: "note:deleted"; conversationId: string; noteId: string }
+  | { type: "todo:list_updated"; conversationId: string; list: TodoList }
+  | { type: "todo:list_deleted"; conversationId: string; listId: string }
+  | { type: "todo:item_updated"; conversationId: string; listId: string; item: TodoItem }
+  | { type: "todo:item_deleted"; conversationId: string; listId: string; itemId: string }
+  | { type: "message:pinned"; conversationId: string; pin: PinnedMessage }
+  | { type: "message:unpinned"; conversationId: string; messageId: string }
+  | { type: "saved:updated"; messageId: string; saved: SavedMessage | null }
+  | { type: "scheduled_message:updated"; scheduledMessage: ScheduledMessage }
+  | { type: "scheduled_message:deleted"; scheduledMessageId: string }
+  | { type: "notification:new"; notification: AppNotification }
+  | { type: "notification:read"; notificationIds: string[] | "all"; unreadCount: number }
+  | { type: "preferences:updated"; preferences: UserPreferences }
+  | { type: "focus:updated"; conversationIds: string[] }
+  | { type: "business:updated"; profile: BusinessProfile | null }
+  | { type: "quick_replies:updated"; quickReplies: QuickReply[] }
+  | { type: "sessions:updated" }
+  | { type: "session:revoked"; sessionId: string }
   | { type: "error"; message: string };
 
 /** Server events that belong to a conversation's timeline (have a top-level conversationId). */

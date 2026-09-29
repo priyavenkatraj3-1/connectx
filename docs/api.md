@@ -50,13 +50,32 @@ lowercase letter, and one number. Creates a row in `users` plus empty
 
 Returns `200` with `{ user, tokens }` or `401` on bad credentials.
 
+**Phase 6:** `signup` and `login` accept an optional
+`"device": { "name": "Work laptop", "platform": "web" | "ios" | "android" | "desktop" }`
+(shown in the device list only), create one `devices` row and one
+`sessions` row, and also return `session: { id }`. Every access token
+carries its session ID (`sid`).
+
+### `POST /api/v1/auth/refresh` (Phase 6)
+
+`{ "refreshToken": "…" }` → `200 { tokens, session }`. Refresh tokens
+**rotate**: each use issues a new pair, and the old refresh token stops
+working. A revoked/expired session or an already-used refresh token →
+`401`.
+
 ### `POST /api/v1/auth/logout`
 
-Stateless in this phase (no server-side session store yet) — returns `204`
-regardless of input. The client is responsible for discarding its tokens.
+Revokes the caller's current session (Phase 6) — its access token is
+rejected from the next request on and its WebSocket connections close.
+Always returns `204`, even with a missing/expired token.
 
 Both `signup` and `login` are rate-limited to 10 requests per 15 minutes
 per IP (`middleware/rateLimiter.ts`).
+
+**Session guard (Phase 6):** every `/api/v1` route except `/auth/*`
+rejects a bearer token whose session was revoked or expired, or which has
+no session ID (tokens issued before Phase 6), with
+`401 { error: { code: "session_revoked" } }`.
 
 ## Users — `modules/users` (fully implemented)
 
@@ -255,9 +274,16 @@ joined the conversation.
   "body": "Hello @Bob",
   "replyToMessageId": "<optional message id>",
   "mentionedUserIds": ["<optional user ids>"],
-  "attachmentId": "<optional, from POST /media>"
+  "attachmentId": "<optional, from POST /media>",
+  "clientMessageId": "<optional client-generated UUID (Phase 6)>"
 }
 ```
+
+**Phase 6 — idempotent sends:** a retry with the same `clientMessageId`
+from the same sender returns the original message instead of creating a
+duplicate (enforced by a unique index, so concurrent retries are safe
+too). Membership is still re-checked on every retry. The offline outbox
+uses this to resend queued messages exactly once.
 
 `body` (≤ 4000 chars, trimmed) and/or `attachmentId` is required; the
 Phase 2 shape `{ "body": "…" }` is unchanged.
@@ -585,6 +611,127 @@ Server → client events `ai:processing` / `ai:completed` / `ai:failed`
 (`{ requestId, feature, code? }`) are sent only to the requesting user and
 never contain content.
 
+## Productivity & collaboration (Phase 6)
+
+All under `/api/v1`, all authenticated (and session-guarded). Bodies are
+schema-validated (`400` on bad input). Anything you can't see returns
+`404`, so IDs can't be probed; acting on a conversation you're not an
+active member of returns `403`.
+
+**Times.** Every time field accepts either an absolute ISO-8601 instant
+with an offset (`dueAt: "2026-10-01T09:00:00Z"`) or a wall-clock value
+(`dueAtLocal: "2026-10-01T09:00"`) interpreted in `timezone` — or, if
+omitted, the user's preferred timezone (`/preferences`). Unknown zones and
+local times that don't exist (DST gaps) are rejected. Instants are stored
+and returned in UTC.
+
+**Sources.** Tasks, reminders and events may reference
+`sourceConversationId` / `sourceMessageId` / `sourceActionId` (a Phase 5
+AI suggestion). The caller must be able to read the source; the message
+itself is never modified. A source excerpt is returned only while the
+message still exists and the user can still read it. An AI suggestion is
+converted only on explicit request, only by its owner, and only once.
+
+### Tasks · reminders · events (private to their owner)
+
+| Method & path | Purpose |
+|---|---|
+| `GET /tasks?status&priority&scope=all\|mine\|assigned&conversationId&q&dueBefore&sort=due\|priority\|created\|updated&order` | List your tasks and tasks assigned to you |
+| `POST /tasks` | Create (`title`, `description?`, `status?`, `priority?` low/medium/high/urgent, `dueAt[Local]?`, `reminderAt[Local]?`, `timezone?`, `assigneeId?`, sources) — an assignee must be an active member of the source conversation |
+| `GET` · `PATCH` · `DELETE /tasks/:id` | Read / update / delete. An assignee may only change `status` |
+| `POST /tasks/:id/complete` · `/reopen` | Status shortcuts |
+| `GET /reminders?status=pending\|fired\|completed\|dismissed\|active` · `POST /reminders` | List / create (`title`, `notes?`, `remindAt[Local]`, `timezone?`, `taskId?`, sources); must be in the future |
+| `PATCH /reminders/:id` · `POST /reminders/:id/complete` · `/dismiss` · `DELETE` | Reschedule (returns it to `pending`), complete, dismiss, delete |
+| `GET /events?from&to` · `POST /events` | List by range / create (`title`, `startsAt[Local]`, `endsAt[Local]?`, `allDay?`, `location?`, `description?`, sources); `endsAt ≥ startsAt` |
+| `GET` · `PATCH` · `DELETE /events/:id` | |
+
+A task's `reminderAt` is kept in step with a linked reminder row.
+
+### Shared notes · shared to-do lists (conversation members)
+
+| Method & path | Purpose |
+|---|---|
+| `GET /notes?conversationId` · `POST /notes` | List / create (`conversationId`, `title`, `content?`, `editPolicy?` `members` \| `admins`) |
+| `GET` · `PATCH` · `DELETE /notes/:id` | `PATCH` takes an optional `expectedVersion`; a stale version → `409 note_conflict` (optimistic concurrency — reload and retry) |
+| `GET /todo-lists?conversationId` · `POST /todo-lists` | Lists with progress counts / create |
+| `GET` · `PATCH` · `DELETE /todo-lists/:id` · `POST /todo-lists/:id/items` | List with items / rename / delete / add item (`title`, `notes?`, `assigneeId?`, `priority?`, `dueAt?`) |
+| `PATCH` · `DELETE /todo-items/:id` · `POST /todo-items/:id/complete` · `/reopen` | |
+
+`editPolicy: "admins"` (groups only) limits editing to the group
+owner/admins and the note's creator; only they may set it. Assignees must
+be active members. Every change is pushed to the conversation's members.
+
+### Pinned · saved messages, preferences, focus
+
+| Method & path | Purpose |
+|---|---|
+| `GET /pins?conversationId` · `POST /pins` (`{ messageId }`) · `DELETE /pins/:messageId` | Conversation-wide pins; in groups only the owner/admins may pin. Deleting the message drops the pin |
+| `GET /saved?q&label&starred&conversationId` · `GET /saved/labels` · `GET /saved/conversation/:conversationId` | Your private saved messages (search, filter) |
+| `PUT /saved/:messageId` (`{ label?, starred?, note? }`) · `DELETE /saved/:messageId` | Save/update, unsave. Saves are hidden once you lose access to the message |
+| `GET` · `PATCH /preferences` | `timezone`, `productivityMode`, `notifyMentions` / `notifyTaskDue` / `notifyReminders` / `notifyScheduledMessages` / `notifyAssignments` |
+| `GET /preferences/focus` · `PUT` / `DELETE /preferences/focus/:conversationId` | Focused conversations (shown first in Productivity Mode) — only conversations you belong to |
+
+### Scheduled messages (text only, private to the sender)
+
+| Method & path | Purpose |
+|---|---|
+| `GET /scheduled-messages?conversationId&status` · `POST /scheduled-messages` | List / create (`conversationId`, `body`, `scheduledFor[Local]`, `timezone?`) — future, at most one year ahead |
+| `PATCH /scheduled-messages/:id` · `POST …/:id/cancel` · `DELETE …/:id` | Only while `scheduled` (else `409`) |
+
+The in-process scheduler (`modules/scheduler`, every
+`SCHEDULER_INTERVAL_SECONDS`) sends due messages through the normal send
+path, re-checking membership at send time. Sends are idempotent (the
+scheduled message ID is the `clientMessageId`), failures retry up to 3
+times, then become `failed` with a reason and a notification. Messages
+left `sending` by a crash are re-queued on startup.
+
+### In-app notifications
+
+| Method & path | Purpose |
+|---|---|
+| `GET /notifications?unreadOnly=true` · `GET /notifications/unread-count` | Newest first |
+| `POST /notifications/:notificationId/read` · `POST /notifications/read-all` · `DELETE /notifications/:notificationId` | |
+
+Types: `mention`, `task_due`, `task_assigned`, `reminder`, `todo_assigned`,
+`scheduled_message_sent`, `scheduled_message_failed`, `session_new`,
+`system`. Each respects the matching preference switch. Payloads hold
+only navigation IDs, never message text. Scheduler-generated
+notifications are de-duplicated per user.
+
+### Sessions / devices
+
+| Method & path | Purpose |
+|---|---|
+| `GET /sessions` | Your active sessions (device name, platform, user agent, created/last seen, `current`) |
+| `PATCH /sessions/:sessionId` (`{ deviceName }`) | Rename a device |
+| `DELETE /sessions/:sessionId` · `POST /sessions/revoke-others` | Sign out one / all other devices. Their tokens stop working immediately and their sockets close with code `4401` |
+
+### Business profile & quick replies (foundation)
+
+| Method & path | Purpose |
+|---|---|
+| `GET` · `PUT` · `DELETE /business/profile` | Your profile (`businessName`, `description?`, `category?`, `website?`, `contactEmail?`, `contactPhone?`, `address?`, `businessHours?` `{ mon: [{ open, close }] … }`, `isPublic?`). `verificationStatus` is not writable and is always `unverified` |
+| `GET /business/profiles/:userId` | Someone's public profile (`404` if private or none) |
+| `GET` · `POST /business/quick-replies` · `PATCH` · `DELETE /business/quick-replies/:id` | Owner-only templates; require a business profile; `shortcut` unique per user (`409`) |
+
+### Realtime events (Phase 6)
+
+Sent only to the users entitled to them — the owner (all their devices)
+for private items, the active members for conversation-scoped ones, and
+the assignee where relevant:
+
+`task:updated` · `task:deleted` · `task:due` · `reminder:updated` ·
+`reminder:deleted` · `calendar_event:updated` · `calendar_event:deleted` ·
+`note:updated` · `note:deleted` · `todo:list_updated` ·
+`todo:list_deleted` · `todo:item_updated` · `todo:item_deleted` ·
+`message:pinned` · `message:unpinned` · `saved:updated` ·
+`scheduled_message:updated` · `scheduled_message:deleted` ·
+`notification:new` · `notification:read` · `preferences:updated` ·
+`focus:updated` · `business:updated` · `quick_replies:updated` ·
+`sessions:updated` · `session:revoked`
+
+The WebSocket handshake also rejects tokens of revoked sessions.
+
 ## Everything else — scaffolded, not implemented
 
 These routers exist with the correct URL shape and `requireAuth`
@@ -593,7 +740,6 @@ intentional — see [development-phases.md](./development-phases.md).
 
 | Module | Routes |
 |---|---|
-| `notifications` | `GET /notifications`, `POST /notifications/:notificationId/read` |
 | `privacy` | `GET /privacy`, `PATCH /privacy` |
 
 Each maps to a documented service interface under the corresponding

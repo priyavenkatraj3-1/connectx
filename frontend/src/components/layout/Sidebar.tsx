@@ -1,8 +1,11 @@
+import { useState } from "react";
 import { Link, NavLink, useLocation } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 import { useConversations } from "../../context/ConversationsContext";
+import { useOptionalWorkspace } from "../../context/WorkspaceContext";
+import { NotificationCenter } from "../productivity/NotificationCenter";
 import { Avatar } from "../ui/Avatar";
-import { ChatIcon, LogoutIcon, SettingsIcon, SparkleIcon, StatusIcon } from "../ui/icons";
+import { BellIcon, ChatIcon, ChecklistIcon, LogoutIcon, SettingsIcon, SparkleIcon, StatusIcon } from "../ui/icons";
 
 function navLinkClasses(isActive: boolean): string {
   return `relative flex h-11 w-11 items-center justify-center rounded-xl transition-colors ${
@@ -10,10 +13,25 @@ function navLinkClasses(isActive: boolean): string {
   }`;
 }
 
+function Badge({ count, tone = "accent" }: { count: number; tone?: "accent" | "red" }) {
+  if (count <= 0) return null;
+  return (
+    <span
+      className={`absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-semibold text-white ${
+        tone === "red" ? "bg-red-500" : "bg-accent-500"
+      }`}
+    >
+      {count > 99 ? "99+" : count}
+    </span>
+  );
+}
+
 export function Sidebar() {
   const { user, logout } = useAuth();
   const { totalUnreadCount } = useConversations();
+  const workspace = useOptionalWorkspace();
   const location = useLocation();
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
   const isChatsActive = location.pathname === "/app" || location.pathname.startsWith("/app/chat");
 
   return (
@@ -30,15 +48,16 @@ export function Sidebar() {
         </div>
         <Link to="/app" className={navLinkClasses(isChatsActive)} aria-label="Chats">
           <ChatIcon />
-          {totalUnreadCount > 0 && (
-            <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-accent-500 px-1 text-[10px] font-semibold text-white">
-              {totalUnreadCount > 99 ? "99+" : totalUnreadCount}
-            </span>
-          )}
+          <Badge count={totalUnreadCount} />
         </Link>
         <NavLink to="/app/status" className={({ isActive }) => navLinkClasses(isActive)} aria-label="Status">
           <StatusIcon />
         </NavLink>
+        {workspace && (
+          <NavLink to="/app/work" className={({ isActive }) => navLinkClasses(isActive)} aria-label="Work">
+            <ChecklistIcon />
+          </NavLink>
+        )}
         <NavLink to="/app/ai" className={({ isActive }) => navLinkClasses(isActive)} aria-label="Ask Your Chats">
           <SparkleIcon />
         </NavLink>
@@ -48,6 +67,21 @@ export function Sidebar() {
       </div>
 
       <div className="flex flex-col items-center gap-3">
+        {workspace && (
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setNotificationsOpen((open) => !open)}
+              className={navLinkClasses(notificationsOpen)}
+              aria-label={`Notifications${workspace.unreadNotifications > 0 ? ` (${workspace.unreadNotifications} unread)` : ""}`}
+              aria-expanded={notificationsOpen}
+            >
+              <BellIcon />
+              <Badge count={workspace.unreadNotifications} tone="red" />
+            </button>
+            {notificationsOpen && <NotificationCenter onClose={() => setNotificationsOpen(false)} />}
+          </div>
+        )}
         <button
           type="button"
           onClick={() => void logout()}

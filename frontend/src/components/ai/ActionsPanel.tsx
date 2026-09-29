@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useAuth } from "../../context/AuthContext";
 import { aiService } from "../../services/aiService";
 import type { AIAction, ActionType } from "../../types/ai";
+import { ItemFormModal, type ItemKind } from "../productivity/ItemFormModal";
 import { Button } from "../ui/Button";
 import { AIErrorNotice, toAIError, type AIErrorInfo } from "./AIShared";
 
@@ -31,8 +32,9 @@ function formatDue(action: AIAction): string | null {
 
 /**
  * Smart Action Extraction. The AI only *suggests*; each suggestion is
- * confirmed, edited or dismissed by the user. Confirmed actions are kept
- * for the upcoming tasks/reminders feature — nothing is scheduled yet.
+ * confirmed, edited or dismissed by the user. Phase 6: "Add as" opens a
+ * pre-filled, editable form — a real task/reminder/event exists only after
+ * the user presses Create there, and a suggestion can be used once.
  */
 export function ActionsPanel({ conversationId }: { conversationId: string }) {
   const { accessToken } = useAuth();
@@ -42,6 +44,7 @@ export function ActionsPanel({ conversationId }: { conversationId: string }) {
   const [lastRunFoundNone, setLastRunFoundNone] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftTitle, setDraftTitle] = useState("");
+  const [converting, setConverting] = useState<{ action: AIAction; kind: ItemKind } | null>(null);
 
   const load = useCallback(async () => {
     if (!accessToken) return;
@@ -95,7 +98,7 @@ export function ActionsPanel({ conversationId }: { conversationId: string }) {
   return (
     <div className="space-y-3">
       <p className="text-xs text-slate-500 dark:text-slate-400">
-        Finds possible tasks, reminders and deadlines in recent messages. Nothing is scheduled — you decide what to keep.
+        Finds possible tasks, reminders and deadlines in recent messages. Nothing is created or scheduled unless you add it.
       </p>
       <Button onClick={() => void extract()} isLoading={extracting} variant="secondary" className="w-full py-1.5">
         Find actions in this chat
@@ -163,9 +166,37 @@ export function ActionsPanel({ conversationId }: { conversationId: string }) {
                 </>
               )}
             </div>
+            {action.convertedTo ? (
+              <p className="mt-1.5 text-[11px] font-semibold text-emerald-600">Added as {action.convertedTo}</p>
+            ) : (
+              editingId !== action.id && (
+                <div className="mt-1.5 flex items-center gap-2 text-[11px]" aria-label="Add as">
+                  <span className="text-slate-400">Add as:</span>
+                  {(["task", "reminder", "event"] as const).map((kind) => (
+                    <button
+                      key={kind}
+                      type="button"
+                      onClick={() => setConverting({ action, kind })}
+                      className="rounded border border-slate-200 px-1.5 py-0.5 font-medium text-slate-600 hover:border-brand-400 hover:text-brand-600 dark:border-slate-700 dark:text-slate-300"
+                    >
+                      {kind[0]!.toUpperCase() + kind.slice(1)}
+                    </button>
+                  ))}
+                </div>
+              )
+            )}
           </li>
         ))}
       </ul>
+      {converting && (
+        <ItemFormModal
+          kind={converting.kind}
+          initial={{ title: converting.action.title, notes: converting.action.notes ?? "", at: converting.action.dueAt }}
+          source={{ sourceActionId: converting.action.id }}
+          onClose={() => setConverting(null)}
+          onCreated={() => void load()}
+        />
+      )}
       {actions.length > 0 && (
         <p className="text-[11px] text-slate-400">Suggestions are AI-generated and may be inaccurate. Check dates before relying on them.</p>
       )}

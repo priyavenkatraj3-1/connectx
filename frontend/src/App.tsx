@@ -12,6 +12,7 @@ import { ChatsView } from "./pages/app/ChatsView";
 import { ProfileView } from "./pages/app/ProfileView";
 import { SettingsView } from "./pages/app/SettingsView";
 import { StatusView } from "./pages/app/StatusView";
+import { WorkView } from "./pages/app/WorkView";
 import { ProtectedRoute } from "./routes/ProtectedRoute";
 
 export function App() {
@@ -37,6 +38,7 @@ export function App() {
             </Route>
             <Route path="status" element={<StatusView />} />
             <Route path="ai" element={<AskYourChatsView />} />
+            <Route path="work" element={<WorkView />} />
             <Route path="settings" element={<SettingsView />} />
             <Route path="profile" element={<ProfileView />} />
           </Route>

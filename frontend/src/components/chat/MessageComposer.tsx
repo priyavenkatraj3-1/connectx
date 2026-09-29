@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useAuth } from "../../context/AuthContext";
 import { ACCEPTED_FILE_EXTENSIONS, formatFileSize, guessKind, mediaService, precheckFile, type UploadHandle } from "../../services/mediaService";
+import { isNetworkError } from "../../services/apiClient";
 import { messageService } from "../../services/messageService";
 import type { AttachmentDTO, AttachmentKind } from "../../types/media";
 import type { MessageDTO, MessageMention } from "../../types/message";
+import type { QuickReply } from "../../types/productivity";
 import { describeMessageContent } from "../../utils/conversationDisplay";
 import { Button } from "../ui/Button";
-import { CloseIcon, FileIcon, PaperclipIcon, SendIcon } from "../ui/icons";
+import { BoltIcon, ClockIcon, CloseIcon, FileIcon, PaperclipIcon, SendIcon } from "../ui/icons";
 
 export interface MentionCandidate {
   userId: string;
@@ -28,6 +30,19 @@ interface MessageComposerProps {
   onCancelEdit(): void;
   onSent(message: MessageDTO): void;
   onEdited(message: MessageDTO): void;
+  /** Phase 6: business quick-reply templates (insert with the ⚡ button or by typing their /shortcut). */
+  quickReplies?: QuickReply[];
+  /** Phase 6: schedules the current text for later; enables the clock button. `whenLocal` is a datetime-local value. */
+  onSchedule?(body: string, whenLocal: string): Promise<void>;
+  /**
+   * Phase 6 offline outbox. When provided, text messages written while
+   * offline — or whose send dropped mid-flight — are queued (and retried
+   * with the same idempotency key) instead of failing.
+   */
+  offlineQueue?: {
+    isOnline: boolean;
+    queue(input: { body: string; replyToMessageId?: string; mentionedUserIds?: string[]; clientMessageId?: string }): Promise<void>;
+  };
 }
 
 const KIND_LABEL: Record<AttachmentKind, string> = {
@@ -53,9 +68,15 @@ export function MessageComposer({
   onCancelEdit,
   onSent,
   onEdited,
+  quickReplies = [],
+  onSchedule,
+  offlineQueue,
 }: MessageComposerProps) {
   const { accessToken } = useAuth();
   const [draft, setDraft] = useState("");
+  const [showQuickReplies, setShowQuickReplies] = useState(false);
+  const [scheduleAt, setScheduleAt] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [mentions, setMentions] = useState<MessageMention[]>([]);
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [pending, setPending] = useState<PendingAttachment | null>(null);
@@ -72,6 +93,9 @@ export function MessageComposer({
     setMentions([]);
     setError(null);
     setPending(null);
+    setScheduleAt(null);
+    setShowQuickReplies(false);
+    setNotice(null);
   }, [conversationId]);
 
   // Entering edit mode loads the message into the composer.
@@ -98,6 +122,17 @@ export function MessageComposer({
       : mentionCandidates
           .filter((c) => c.displayName.toLowerCase().includes(mentionQuery.toLowerCase()))
           .slice(0, 6);
+
+  // "/shortcut" typed at the start of an empty-ish draft suggests matching quick replies.
+  const shortcutQuery = !editing && /^\/[\w-]*$/.test(draft) ? draft.toLowerCase() : null;
+  const quickReplyMatches =
+    showQuickReplies ? quickReplies : shortcutQuery ? quickReplies.filter((reply) => reply.shortcut.startsWith(shortcutQuery)).slice(0, 6) : [];
+
+  function insertQuickReply(reply: QuickReply) {
+    setDraft((current) => (current === "" || /^\/[\w-]*$/.test(current) ? reply.body : `${current}${current.endsWith(" ") ? "" : " "}${reply.body}`));
+    setShowQuickReplies(false);
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  }
 
   function updateDraft(value: string, caret: number) {
     setDraft(value);
@@ -174,11 +209,28 @@ export function MessageComposer({
 
     setIsSending(true);
     setError(null);
+    setNotice(null);
+    const queueInput = {
+      body,
+      replyToMessageId: replyingTo?.id,
+      mentionedUserIds: mentionedUserIds.length > 0 ? mentionedUserIds : undefined,
+    };
+    const canQueue = !!offlineQueue && !attachmentReady && body.length > 0;
+    const finishQueued = () => {
+      onCancelReply();
+      setDraft("");
+      setMentions([]);
+      setNotice("You're offline — the message will be sent when you reconnect.");
+    };
     try {
       if (editing) {
         const updated = await messageService.edit(accessToken, conversationId, editing.id, body, mentionedUserIds);
         onEdited(updated);
         onCancelEdit();
+      } else if (offlineQueue && canQueue && !offlineQueue.isOnline) {
+        await offlineQueue.queue(queueInput);
+        finishQueued();
+        return;
       } else {
         const hasExtras = Boolean(replyingTo || mentionedUserIds.length > 0 || attachmentReady);
         const sent = hasExtras
@@ -196,7 +248,31 @@ export function MessageComposer({
       setDraft("");
       setMentions([]);
     } catch (err) {
+      // The connection dropped mid-send: queue it with the *same* idempotency key, so if the
+      // first attempt did reach the server, the retry returns that message instead of a duplicate.
+      if (offlineQueue && canQueue && !editing && isNetworkError(err)) {
+        await offlineQueue.queue({ ...queueInput, clientMessageId: err.clientMessageId });
+        finishQueued();
+        return;
+      }
       setError(err instanceof Error ? err.message : editing ? "Failed to save edit" : "Failed to send message");
+    } finally {
+      setIsSending(false);
+    }
+  }
+
+  async function schedule() {
+    if (!onSchedule || !scheduleAt || !body) return;
+    setIsSending(true);
+    setError(null);
+    try {
+      await onSchedule(body, scheduleAt);
+      setDraft("");
+      setMentions([]);
+      setScheduleAt(null);
+      setNotice("Message scheduled. Manage it in Chat tools → Scheduled.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't schedule the message");
     } finally {
       setIsSending(false);
     }
@@ -308,6 +384,49 @@ export function MessageComposer({
         </ul>
       )}
 
+      {quickReplyMatches.length > 0 && (
+        <ul className="max-h-48 overflow-y-auto border-b border-slate-100 p-1 dark:border-slate-800" aria-label="Quick replies">
+          {quickReplyMatches.map((reply) => (
+            <li key={reply.id}>
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => insertQuickReply(reply)}
+                className="w-full rounded-md px-3 py-1.5 text-left text-sm hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                <span className="font-mono text-xs text-brand-600">{reply.shortcut}</span> <span className="font-medium">{reply.title}</span>
+                <span className="block truncate text-xs text-slate-500">{reply.body}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {scheduleAt !== null && (
+        <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 px-4 py-2 text-xs dark:border-slate-800" aria-label="Schedule message">
+          <span className="font-medium text-slate-600 dark:text-slate-300">Send later at</span>
+          <input
+            type="datetime-local"
+            value={scheduleAt}
+            onChange={(e) => setScheduleAt(e.target.value)}
+            className="rounded-md border border-slate-200 px-2 py-1 dark:border-slate-700 dark:bg-surface-dark-subtle"
+            aria-label="Send at"
+          />
+          <Button type="button" className="px-3 py-1 text-xs" disabled={!scheduleAt || !body || isSending} onClick={() => void schedule()}>
+            Schedule
+          </Button>
+          <Button type="button" variant="ghost" className="px-2 py-1 text-xs" onClick={() => setScheduleAt(null)}>
+            Cancel
+          </Button>
+        </div>
+      )}
+
+      {notice && !error && (
+        <p role="status" className="px-4 pt-2 text-xs text-slate-500">
+          {notice}
+        </p>
+      )}
+
       {error && (
         <p role="alert" className="px-4 pt-2 text-xs text-red-600 dark:text-red-400">
           {error}
@@ -338,6 +457,31 @@ export function MessageComposer({
             >
               <PaperclipIcon />
             </button>
+            {quickReplies.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowQuickReplies((open) => !open)}
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+                aria-label="Quick replies"
+                aria-expanded={showQuickReplies}
+                title="Insert a quick reply (or type /shortcut)"
+              >
+                <BoltIcon />
+              </button>
+            )}
+            {onSchedule && (
+              <button
+                type="button"
+                onClick={() => setScheduleAt((current) => (current === null ? "" : null))}
+                disabled={pending !== null}
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 disabled:opacity-40 dark:text-slate-400 dark:hover:bg-slate-800"
+                aria-label="Schedule message"
+                aria-expanded={scheduleAt !== null}
+                title="Send this message later"
+              >
+                <ClockIcon />
+              </button>
+            )}
           </>
         )}
         <textarea
@@ -353,6 +497,7 @@ export function MessageComposer({
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
               if (suggestions[0]) pickMention(suggestions[0]);
+              else if (quickReplyMatches[0] && (shortcutQuery || showQuickReplies)) insertQuickReply(quickReplyMatches[0]);
               else void submit();
             }
           }}

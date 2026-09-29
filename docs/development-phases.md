@@ -126,7 +126,7 @@ to a later phase.
 
 ## Later — Notifications, Communities & Media follow-ups (planned)
 
-- Push notification delivery (web push, mobile push), mention and missed-call notifications
+- Push notification delivery (web push, mobile push) and missed-call notifications (in-app mention notifications shipped in Phase 6)
 - Screen sharing; an SFU/media server for larger group calls
 - Communities/channels
 - Media follow-ups: object storage provider, thumbnails, voice recording,
@@ -153,12 +153,54 @@ to a later phase.
   ([manual-testing-phase5.md](./manual-testing-phase5.md)).
 - **Known limitations:** see [ai.md](./ai.md#known-limitations)
 
-## Phase 6 — Multi-device, Scale & Productivity (planned)
+## Phase 6 — Advanced Productivity & Collaboration ✅
 
-- Refresh-token rotation and server-side session revocation
+- **Tasks, reminders, events** — private CRUD with filters/sorting,
+  priorities, due dates, assignees (active members of the source chat,
+  status-only access), timezone-aware wall-clock input (IANA zones, DST
+  gaps rejected); create from any message or, on explicit request, from a
+  Phase 5 AI suggestion (at most once)
+- **Shared notes** (edit policy, optimistic concurrency) and **shared
+  to-do lists** (assignees, completion) per conversation, live for all
+  members
+- **Productivity Mode** — focused conversations first, then unread; chat
+  list filters; per-type notification switches; preferred timezone
+- **Pinned** (conversation-wide, admins-only in groups) and **saved**
+  messages (private labels, stars, notes, search)
+- **Offline foundation** — cached chats/messages, a per-user outbox that
+  resends exactly once via `clientMessageId` idempotency, offline banner
+- **Multi-device sessions** — server-side sessions, refresh-token
+  rotation with reuse detection, revocation that closes sockets, device
+  list/rename/sign-out-others, new-sign-in notification; edits, deletes,
+  read state, preferences and every Phase 6 item sync across devices
+- **Scheduled messages** (text) and an in-process **scheduler** for
+  reminders, task-due notifications and scheduled sends (idempotent,
+  retried, crash-recovered)
+- **In-app notifications** — mentions, assignments, due tasks, reminders,
+  scheduled-send results, new sign-ins; unread badge and notification
+  center
+- **Business profile foundation** — profile, hours, public/private,
+  honest `unverified` status; owner-only **quick replies** (⚡ or
+  `/shortcut` in the composer)
+- Frontend: Work page (Tasks · Reminders · Events · Saved · Scheduled),
+  chat tools panel (notes, to-dos, pins), per-message menu, Settings →
+  Productivity / Notifications / Devices / Business
+- Migration `005_productivity.sql`; backend tests also run green against
+  real PostgreSQL
+- **Verified by:** API tests (including the scheduler with a controlled
+  clock), frontend component/offline tests, and an end-to-end smoke run of
+  the production build against real PostgreSQL. Manual plan:
+  [manual-testing-phase6.md](./manual-testing-phase6.md).
+- **Deferred from the original Phase 6 plan:** horizontal scaling (shared
+  realtime pub/sub, shared media storage, multi-instance scheduler) and
+  native mobile/desktop client shells
+- **Known limitations:** see the README's *Known limitations (Phase 6)*
+
+## Later — Scale & native clients (planned)
+
+- Horizontal scaling of the backend (shared realtime pub/sub, shared media
+  storage, a single-leader or queue-based scheduler)
 - Mobile/desktop client shells against the same API
-- Horizontal scaling of the backend (shared realtime pub/sub, shared media storage)
-- Productivity/collaboration features beyond messaging (reminders, tasks)
 
 ## Ground rules for every phase
 

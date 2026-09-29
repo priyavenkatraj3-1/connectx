@@ -108,7 +108,7 @@ question is JSON-encoded too.
 |---|---|---|---|
 | Ask Your Chats | `POST /ai/ask` | text | 1–10 chats, question ≤ 500 chars. Keyword-ranked + recent messages, bounded by `AI_MAX_CONTEXT_CHARS`. No messages → answered locally with "not enough information" (no AI call) |
 | AI Memory | `GET/POST/DELETE /ai/memories`, `DELETE /ai/memories/:id` | none | Explicit only (typed, or "Remember" on a message). Never extracted automatically. Max 200/user. List/delete/clear always work, even with memory off |
-| Smart Action Extraction | `POST /ai/conversations/:id/actions/extract`, `GET /ai/actions`, `PATCH /ai/actions/:id`, `POST …/confirm`, `POST …/dismiss` | text | Stored as `suggested`. Only an explicit confirm makes it `confirmed`. **Nothing is scheduled** — confirmed rows are the Phase 6 handoff |
+| Smart Action Extraction | `POST /ai/conversations/:id/actions/extract`, `GET /ai/actions`, `PATCH /ai/actions/:id`, `POST …/confirm`, `POST …/dismiss` | text | Stored as `suggested`. Only an explicit confirm makes it `confirmed`. Suggestions never schedule anything themselves. From Phase 6 the owner can explicitly turn one into a task/reminder/event (`sourceActionId`), at most once |
 | Group Decision AI | `POST /ai/conversations/:id/decision-summary` (`mode`: summary/decisions/open_issues) | text | Groups only. A "decision" needs explicit agreement in the messages; every item cites sources |
 | Translation | `POST /ai/messages/:id/translate` | text | On request only; original is never modified; cached per (message, language, source hash) |
 | Scam/Spam Shield | `POST /ai/conversations/:id/safety-scan` (local), `POST /ai/messages/:id/scam-check` (AI), `POST /ai/messages/:id/safety-feedback` | local / text | Warnings are advisory — messages are never blocked. Own messages and dismissed/reported ones are skipped. Reports are stored; no moderation pipeline yet |
@@ -197,5 +197,5 @@ see [manual-testing-phase5.md](./manual-testing-phase5.md) for that.
 - Voice Intelligence works on uploaded audio attachments; in-app voice
   recording still doesn't exist.
 - Translation is per message on request — no automatic whole-chat translation.
-- Confirmed actions don't create reminders/tasks yet (Phase 6).
+- A suggestion becomes a task/reminder/event only when the user explicitly creates one from it (Phase 6); nothing is created automatically.
 - Real-model output quality is not covered by automated tests.

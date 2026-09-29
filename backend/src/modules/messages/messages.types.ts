@@ -43,6 +43,12 @@ export interface MessageDTO {
   replyTo: ReplyPreview | null;
   mentions: MessageMention[];
   attachment: AttachmentDTO | null;
+  /**
+   * The sender's idempotency key (Phase 6 offline outbox), echoed back so a
+   * client can match a queued message to the one the server stored. A
+   * random UUID chosen by the sender; carries no content.
+   */
+  clientMessageId: string | null;
 }
 
 export interface MessagePage {
@@ -57,4 +63,6 @@ export interface SendMessageParams {
   replyToMessageId?: string | null;
   mentionedUserIds?: string[];
   attachmentId?: string | null;
+  /** Idempotency key: re-sending with the same key returns the original message instead of a duplicate. */
+  clientMessageId?: string | null;
 }
