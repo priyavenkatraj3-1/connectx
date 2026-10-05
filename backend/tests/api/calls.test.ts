@@ -15,7 +15,8 @@ function auth(user: TestUser) {
   return { Authorization: `Bearer ${user.accessToken}` };
 }
 
-const RING_TIMEOUT_MS = 150;
+// Long enough that calls left ringing don't time out mid-test when the full suite runs in parallel.
+const RING_TIMEOUT_MS = 2000;
 
 describe("Calls API and lifecycle", () => {
   let app: Express;

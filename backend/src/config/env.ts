@@ -76,6 +76,14 @@ export interface EnvConfig {
   maxUploadSizeMb: number;
   /** Root directory for the local-disk media storage provider (development storage; see modules/media/storage). */
   uploadDir: string;
+  /** Where attachment bytes live (MEDIA_STORAGE): "local" disk under uploadDir (default; development) or "cloudinary" (production). */
+  mediaStorage: "local" | "cloudinary";
+  cloudinary: {
+    /** CLOUDINARY_URL (cloudinary://<api_key>:<api_secret>@<cloud_name>). Required when mediaStorage is "cloudinary". */
+    url: string | undefined;
+    /** Public-ID prefix for every stored file. Don't change it once files exist: stored keys would no longer resolve. */
+    folder: string;
+  };
   /** WebRTC ICE servers handed to call clients — see modules/calls/ice-servers.ts and docs/calls.md. */
   webrtc: {
     stunUrls: string[];
@@ -126,6 +134,25 @@ function readTrustProxy(): boolean | number | string {
   if (raw.toLowerCase() === "true") return true;
   if (/^\d+$/.test(raw)) return Number(raw);
   return raw; // e.g. "loopback" or a comma-separated list of proxy IPs/subnets
+}
+
+function readMediaStorage(): EnvConfig["mediaStorage"] {
+  const value = (process.env.MEDIA_STORAGE ?? "local").trim().toLowerCase() || "local";
+  if (value !== "local" && value !== "cloudinary") {
+    throw new Error(`Environment variable MEDIA_STORAGE must be "local" or "cloudinary" (got "${value}")`);
+  }
+  if (value === "cloudinary" && !readOptional("CLOUDINARY_URL")) {
+    throw new Error("MEDIA_STORAGE=cloudinary requires CLOUDINARY_URL");
+  }
+  return value;
+}
+
+function readCloudinaryFolder(): string {
+  const value = readOptional("CLOUDINARY_FOLDER") ?? "connectx";
+  if (!/^[A-Za-z0-9_-]+(\/[A-Za-z0-9_-]+)*$/.test(value)) {
+    throw new Error("Environment variable CLOUDINARY_FOLDER may only contain letters, digits, _, - and / separators");
+  }
+  return value;
 }
 
 function readEnv(name: string, fallback?: string): string {
@@ -192,6 +219,11 @@ export const env: EnvConfig = {
   },
   maxUploadSizeMb: readNumber("MAX_UPLOAD_SIZE_MB", 25, { min: 1, max: 1024 }),
   uploadDir: process.env.UPLOAD_DIR ?? "uploads",
+  mediaStorage: readMediaStorage(),
+  cloudinary: {
+    url: readOptional("CLOUDINARY_URL"),
+    folder: readCloudinaryFolder(),
+  },
   webrtc: {
     // No default ICE servers: with none configured, calls work between
     // browsers on the same machine/LAN (host candidates) and nothing is sent

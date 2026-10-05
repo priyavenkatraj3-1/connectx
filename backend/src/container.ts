@@ -25,7 +25,7 @@ import { GroupsRepository } from "./modules/groups/groups.repository";
 import { GroupsService } from "./modules/groups/groups.service";
 import { MediaRepository } from "./modules/media/media.repository";
 import { MediaService } from "./modules/media/media.service";
-import { LocalDiskStorageProvider } from "./modules/media/storage/local-disk.storage";
+import { createStorageProvider } from "./modules/media/storage/create-storage-provider";
 import type { StorageProvider } from "./modules/media/storage/storage-provider.interface";
 import { MessagesRepository } from "./modules/messages/messages.repository";
 import { MessagesService, type MentionNotifier } from "./modules/messages/messages.service";
@@ -52,7 +52,7 @@ import { noopRealtimeGateway, type RealtimeGateway } from "./realtime/gateway.in
 export interface ContainerOverrides {
   db?: DatabaseClient;
   realtimeGateway?: RealtimeGateway;
-  /** Media byte storage. Defaults to local disk under UPLOAD_DIR; tests inject an in-memory store. */
+  /** Media byte storage. Defaults to MEDIA_STORAGE (local disk or Cloudinary); tests inject an in-memory store. */
   storage?: StorageProvider;
   /** Upload size cap in bytes. Defaults to MAX_UPLOAD_SIZE_MB. */
   maxUploadBytes?: number;
@@ -117,7 +117,7 @@ export interface Container {
  */
 export function createContainer(overrides: ContainerOverrides = {}): Container {
   const db = overrides.db ?? getDb();
-  const storage = overrides.storage ?? new LocalDiskStorageProvider(env.uploadDir);
+  const storage = overrides.storage ?? createStorageProvider(env);
   const maxUploadBytes = overrides.maxUploadBytes ?? env.maxUploadSizeMb * 1024 * 1024;
 
   const realtimeGatewayRef: { current: RealtimeGateway } = {

@@ -141,9 +141,11 @@ Uploaded files are stored on local disk under `UPLOAD_DIR` (default
 `backend/uploads/`, gitignored), as `<conversationId>/<attachmentId>`
 files (status media: `statuses/<ownerId>/<attachmentId>`); metadata lives
 in the `attachments` table. The storage layer sits
-behind a `StorageProvider` interface so it can be replaced with S3/object
-storage later. Back this directory up together with the database —
-deleting it breaks existing attachments.
+behind a `StorageProvider` interface; production hosts without a
+persistent disk use Cloudinary instead (`MEDIA_STORAGE=cloudinary`, see
+[docs/deployment.md](docs/deployment.md#7-file-storage)). With local
+storage, back this directory up together with the database — deleting it
+breaks existing attachments.
 
 ### Environment variables
 
@@ -161,7 +163,9 @@ ones:
 | `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` | Required — long random secrets for signing tokens |
 | `BCRYPT_SALT_ROUNDS` | Password hashing cost factor (default `12`) |
 | `MAX_UPLOAD_SIZE_MB` | Upload size limit (default `25`) |
+| `MEDIA_STORAGE` | `local` (default) or `cloudinary` |
 | `UPLOAD_DIR` | Local media storage directory (default `uploads`, relative to `backend/`) |
+| `CLOUDINARY_URL` / `CLOUDINARY_FOLDER` | Cloudinary credentials (`cloudinary://key:secret@cloud`) and public-ID prefix (default `connectx`); required with `MEDIA_STORAGE=cloudinary` |
 | `WEBRTC_STUN_URLS` / `WEBRTC_TURN_URLS` | ICE servers for calls — **empty by default** (same machine/LAN only). See [docs/calls.md](docs/calls.md#stun--turn) |
 | `WEBRTC_TURN_SECRET` (+ `WEBRTC_TURN_TTL_SECONDS`) | Recommended TURN auth: short-lived per-user credentials (coturn `use-auth-secret`) |
 | `WEBRTC_TURN_USERNAME` / `WEBRTC_TURN_CREDENTIAL` | Alternative static TURN credentials |

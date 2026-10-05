@@ -16,7 +16,7 @@ browser ──HTTPS──▶ reverse proxy (TLS) ──▶ static frontend files
         ──HTTPS/WSS──▶ reverse proxy ──▶ ONE backend process (HTTP + /ws)
                                                │
                                                ├──▶ PostgreSQL 14+
-                                               └──▶ local disk (UPLOAD_DIR)
+                                               └──▶ local disk (UPLOAD_DIR) or Cloudinary
 ```
 
 Run exactly **one** backend instance. The following live in that
@@ -34,8 +34,9 @@ storage and a scheduler lock — none of which exist yet.
 - PostgreSQL 14+ (tested with PostgreSQL 16).
 - A TLS-terminating reverse proxy (nginx, Caddy, a cloud load balancer…).
   Browsers only allow camera/microphone on HTTPS (or `localhost`).
-- Persistent disk for `UPLOAD_DIR` (or replace `LocalDiskStorageProvider`
-  with an object-storage provider — not included).
+- Media storage: either a persistent disk for `UPLOAD_DIR`, or a
+  Cloudinary account (`MEDIA_STORAGE=cloudinary`) on hosts whose disk is
+  wiped on restart/redeploy (e.g. Render's free tier). See §7.
 - For calls beyond one LAN: STUN, and for restrictive networks a TURN
   server (e.g. coturn). See [calls.md](./calls.md#stun--turn).
 
@@ -190,12 +191,30 @@ Changing `JWT_*_SECRET` signs **everyone** out (all tokens become invalid).
 
 ## 7. File storage
 
-- Local disk only (`UPLOAD_DIR`): single instance, not encrypted at rest,
-  no quota, no cleanup of never-sent uploads. Back it up with the database
-  (backup-recovery.md).
-- To scale out, implement `StorageProvider`
-  (`backend/src/modules/media/storage/storage-provider.interface.ts`) for
-  object storage; nothing else needs to change.
+`MEDIA_STORAGE` selects where attachment bytes live. Metadata always stays
+in PostgreSQL, and clients always download through the authenticated
+`GET /api/v1/media/:id/content` route, whichever provider is used.
+
+- `local` (default): disk under `UPLOAD_DIR`. Single instance, not
+  encrypted at rest, no quota, no cleanup of never-sent uploads. Needs a
+  persistent disk; back it up with the database (backup-recovery.md).
+- `cloudinary`: set `CLOUDINARY_URL` (from the Cloudinary console). Files
+  are uploaded as `raw` assets (exact bytes, no processing) with delivery
+  type `authenticated`, so they have no public URL; the backend fetches
+  them through URLs signed with the API secret, which never leave the
+  server. Public IDs are `<CLOUDINARY_FOLDER>/<storage key>` — don't
+  change `CLOUDINARY_FOLDER` once files exist. Deletes remove the asset
+  and invalidate CDN copies.
+  - Free plan: raw files are limited to 10 MB, so set
+    `MAX_UPLOAD_SIZE_MB=10` and `VITE_MAX_UPLOAD_MB=10`.
+  - Free accounts block delivery of PDF and ZIP files until it's allowed
+    in Settings → Security ("Allow delivery of PDF and ZIP files"). Test a
+    PDF download after deploying.
+  - Switching providers doesn't move existing files: attachments stored
+    by the old provider become unavailable (404) unless copied across.
+- Other object stores: implement `StorageProvider`
+  (`backend/src/modules/media/storage/storage-provider.interface.ts`) and
+  select it in `create-storage-provider.ts`; nothing else needs to change.
 
 ## 8. Scheduler (reminders, task-due notifications, scheduled messages)
 
