@@ -28,6 +28,12 @@ interface AuthContextValue {
   logout(): Promise<void>;
   /** Drops the local session without calling the server (it already ended server-side). */
   endLocalSession(reason: string): void;
+  /**
+   * Exchanges the refresh token for a new access token now (concurrent
+   * calls share one request). Resolves to the new token, or null if the
+   * session couldn't be refreshed — after a definitive 401 it is ended.
+   */
+  refreshAccessToken(): Promise<string | null>;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -134,29 +140,48 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => setSessionEndedHandler(null);
   }, [endLocalSession]);
 
+  // One refresh at a time: the refresh token rotates, so a second concurrent
+  // request with the same token would be treated as reuse and end the session.
+  const refreshInFlight = useRef<Promise<string | null> | null>(null);
+  const refreshAccessToken = useCallback((): Promise<string | null> => {
+    if (refreshInFlight.current) return refreshInFlight.current;
+    const current = storedRef.current;
+    if (!current) return Promise.resolve(null);
+    const refreshToken = current.tokens.refreshToken;
+    const request = authService
+      .refresh(refreshToken)
+      .then(
+        (result) => {
+          const latest = storedRef.current;
+          if (latest?.tokens.refreshToken !== refreshToken) return latest?.tokens.accessToken ?? null; // signed out/in meanwhile
+          const next: StoredAuth = { ...latest, tokens: result.tokens, sessionId: result.session.id };
+          storedRef.current = next;
+          setStored(next);
+          persistAuth(next);
+          return result.tokens.accessToken;
+        },
+        (err: unknown) => {
+          // A definitive "no" from the server ends the session; network problems just wait for the next attempt.
+          if (err instanceof ApiError && err.status === 401) endLocalSession("Your session expired. Please sign in again.");
+          return null;
+        }
+      )
+      .finally(() => {
+        refreshInFlight.current = null;
+      });
+    refreshInFlight.current = request;
+    return request;
+  }, [endLocalSession]);
+
   // Refresh the access token shortly before it expires (tokens are short-lived; the refresh token rotates).
   useEffect(() => {
     if (!stored) return;
     const exp = tokenExpiry(stored.tokens.accessToken);
     if (exp === null) return;
     const delay = Math.max(0, exp * 1000 - Date.now() - REFRESH_LEAD_MS);
-    const timer = setTimeout(() => {
-      const refreshToken = stored.tokens.refreshToken;
-      authService.refresh(refreshToken).then(
-        (result) => {
-          if (storedRef.current?.tokens.refreshToken !== refreshToken) return; // signed out/in meanwhile
-          const next: StoredAuth = { ...stored, tokens: result.tokens, sessionId: result.session.id };
-          setStored(next);
-          persistAuth(next);
-        },
-        (err: unknown) => {
-          // A definitive "no" from the server ends the session; network problems just wait for the next attempt.
-          if (err instanceof ApiError && err.status === 401) endLocalSession("Your session expired. Please sign in again.");
-        }
-      );
-    }, delay);
+    const timer = setTimeout(() => void refreshAccessToken(), delay);
     return () => clearTimeout(timer);
-  }, [stored, endLocalSession]);
+  }, [stored, refreshAccessToken]);
 
   const value = useMemo<AuthContextValue>(
     () => ({
@@ -171,8 +196,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signup,
       logout,
       endLocalSession,
+      refreshAccessToken,
     }),
-    [stored, isLoading, error, signedOutReason, login, signup, logout, endLocalSession]
+    [stored, isLoading, error, signedOutReason, login, signup, logout, endLocalSession, refreshAccessToken]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -1,6 +1,6 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthProvider } from "../../context/AuthContext";
 import { mediaService } from "../../services/mediaService";
 import { seedAuthenticatedSession } from "../../tests/testAuth";
@@ -137,10 +137,27 @@ describe("MessageBubble", () => {
       createdAt: new Date().toISOString(),
     };
 
+    const originalUrlMethods = {
+      createObjectURL: Object.getOwnPropertyDescriptor(URL, "createObjectURL"),
+      revokeObjectURL: Object.getOwnPropertyDescriptor(URL, "revokeObjectURL"),
+    };
+
     beforeEach(() => {
       vi.mocked(mediaService.fetchContent).mockReset();
       URL.createObjectURL = vi.fn(() => "blob:mock-url");
       URL.revokeObjectURL = vi.fn();
+    });
+
+    // Runs even when a test's assertions fail (e.g. restores the anchor-click spy).
+    afterEach(() => {
+      // Unmount first: unmounting revokes object URLs, so the URL stubs must still be in place.
+      cleanup();
+      vi.restoreAllMocks();
+      vi.mocked(mediaService.fetchContent).mockReset();
+      for (const [name, original] of Object.entries(originalUrlMethods)) {
+        if (original) Object.defineProperty(URL, name, original);
+        else delete (URL as unknown as Record<string, unknown>)[name];
+      }
     });
 
     it("loads an image through the authenticated API and renders it", async () => {
@@ -189,8 +206,10 @@ describe("MessageBubble", () => {
       expect(screen.getByText("2.0 KB")).toBeInTheDocument();
       expect(mediaService.fetchContent).not.toHaveBeenCalled();
 
+      const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
       await user.click(screen.getByRole("button", { name: "Download report.pdf" }));
-      expect(await screen.findByRole("link", { name: "Save report.pdf" })).toHaveAttribute("download", "report.pdf");
+      await waitFor(() => expect(click).toHaveBeenCalledTimes(1));
+      expect(mediaService.fetchContent).toHaveBeenCalledWith("test-access-token", "att-3");
     });
   });
 });

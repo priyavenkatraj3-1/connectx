@@ -51,6 +51,16 @@ export function setSessionEndedHandler(handler: ((code: string) => void) | null)
   sessionEndedHandler = handler;
 }
 
+/** True for the 401 codes that mean this device's session is over (not just an expired access token). */
+export function isSessionEndedCode(code: string | undefined): boolean {
+  return code === "session_revoked" || code === "session_expired";
+}
+
+/** Reports an authenticated 401 response; signs this device out if the session itself has ended. */
+export function reportUnauthorized(status: number, code: string | undefined): void {
+  if (status === 401 && isSessionEndedCode(code)) sessionEndedHandler?.(code!);
+}
+
 interface RequestOptions {
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: unknown;
@@ -87,9 +97,7 @@ export async function apiRequest<TResponse>(path: string, options: RequestOption
   if (!response.ok) {
     const message = data?.error?.message ?? "Something went wrong. Please try again.";
     const code = typeof data?.error?.code === "string" ? (data.error.code as string) : undefined;
-    if (response.status === 401 && (code === "session_revoked" || code === "session_expired") && options.accessToken) {
-      sessionEndedHandler?.(code);
-    }
+    if (options.accessToken) reportUnauthorized(response.status, code);
     throw new ApiError(message, response.status, code);
   }
 

@@ -1,7 +1,9 @@
 import type { Express } from "express";
+import jwt from "jsonwebtoken";
 import request from "supertest";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../../src/app";
+import { env } from "../../src/config/env";
 import type { Container } from "../../src/container";
 import { createGroup, SAMPLE_FILES, sendMessage, uploadFile } from "../helpers/fixtures";
 import { MemoryStorageProvider } from "../helpers/memoryStorage";
@@ -169,6 +171,44 @@ describe("Media API", () => {
       expect((await request(app).get(`/api/v1/media/${attachmentId}/content`).set(auth(eve))).status).toBe(403);
       expect((await request(app).get(`/api/v1/media/${attachmentId}`).set(auth(eve))).status).toBe(403);
       expect((await request(app).get(`/api/v1/media/${attachmentId}/content`)).status).toBe(401);
+    });
+
+    it("rejects expired, forged and missing tokens for content (no bytes), and serves it again after a token refresh", async () => {
+      const signup = await request(app)
+        .post("/api/v1/auth/signup")
+        .send({ email: `media-refresh-${Date.now()}@example.com`, password: "Passw0rd!", displayName: "Rae" });
+      const rae = { userId: signup.body.user.id as string, sid: signup.body.session.id as string };
+      const { conversationId: raeConversation } = await createGroup(app, alice, [
+        { userId: rae.userId, accessToken: signup.body.tokens.accessToken, email: "", displayName: "Rae" },
+      ]);
+      const upload = await uploadFile(app, alice, raeConversation, "notes.pdf", SAMPLE_FILES.pdf);
+      const attachmentId = upload.body.attachment.id as string;
+      await sendMessage(app, alice, raeConversation, { attachmentId });
+      const url = `/api/v1/media/${attachmentId}/content`;
+
+      const expired = jwt.sign({ userId: rae.userId, sid: rae.sid, exp: Math.floor(Date.now() / 1000) - 60 }, env.jwt.accessSecret);
+      const forged = jwt.sign({ userId: rae.userId, sid: rae.sid }, "not-the-server-secret");
+      for (const token of [expired, forged]) {
+        const res = await request(app).get(url).set("Authorization", `Bearer ${token}`);
+        expect(res.status).toBe(401);
+        // No session code: the client treats this as "refresh the access token and retry once".
+        expect(res.body).toEqual({ error: { message: "Invalid or expired token" } });
+        expect(res.headers["content-disposition"]).toBeUndefined();
+      }
+      const missing = await request(app).get(url);
+      expect(missing.status).toBe(401);
+      expect(missing.body).toEqual({ error: { message: "Authentication required" } });
+
+      const refreshed = await request(app).post("/api/v1/auth/refresh").send({ refreshToken: signup.body.tokens.refreshToken });
+      expect(refreshed.status).toBe(200);
+      const res = await request(app)
+        .get(url)
+        .set("Authorization", `Bearer ${refreshed.body.tokens.accessToken as string}`)
+        .buffer(true)
+        .parse(binaryParser);
+      expect(res.status).toBe(200);
+      expect(res.headers["content-disposition"]).toMatch(/^attachment; filename="notes.pdf"/);
+      expect(res.body).toEqual(SAMPLE_FILES.pdf);
     });
 
     it("forces documents to download rather than render inline", async () => {

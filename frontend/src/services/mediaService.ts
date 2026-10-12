@@ -1,5 +1,5 @@
 import type { AttachmentDTO, AttachmentKind } from "../types/media";
-import { API_BASE_URL, ApiError, apiRequest, buildQueryString } from "./apiClient";
+import { API_BASE_URL, ApiError, apiRequest, buildQueryString, reportUnauthorized } from "./apiClient";
 
 /**
  * Client-side mirror of the backend allow-list (backend/src/modules/media/
@@ -146,7 +146,9 @@ export const mediaService = {
     });
     if (!response.ok) {
       const data = await response.json().catch(() => ({}));
-      throw new ApiError(data?.error?.message ?? "Couldn't load this file", response.status);
+      const code = typeof data?.error?.code === "string" ? (data.error.code as string) : undefined;
+      reportUnauthorized(response.status, code);
+      throw new ApiError(data?.error?.message ?? "Couldn't load this file", response.status, code);
     }
     return response.blob();
   },
