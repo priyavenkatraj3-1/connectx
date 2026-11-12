@@ -110,7 +110,7 @@ export function formatCallDuration(totalSeconds: number): string {
 
 export function CallProvider({ children, mediaDevices, createPeerConnection }: CallProviderProps) {
   const { accessToken, user } = useAuth();
-  const { subscribe, send, connectionId } = useRealtime();
+  const { subscribe, send, connectionId, onReconnect } = useRealtime();
   const myId = user?.id;
 
   const devices = mediaDevices ?? (typeof navigator !== "undefined" ? navigator.mediaDevices : undefined);
@@ -263,7 +263,7 @@ export function CallProvider({ children, mediaDevices, createPeerConnection }: C
         },
       });
     },
-    [sendSignal]
+    [sendSignal, peerFactory]
   );
 
   const startCall = useCallback(
@@ -519,6 +519,27 @@ export function CallProvider({ children, mediaDevices, createPeerConnection }: C
       }
     });
   }, [subscribe, send, myId, finishCall, updateIncoming, updatePhase]);
+
+  // After a reconnect: an incoming call we're still showing may have been
+  // cancelled or answered elsewhere while we were offline (that event is lost).
+  // Ask the server; stop ringing unless it's still ringing for us. (Invites
+  // that arrived while offline are re-sent by the server on connect.)
+  useEffect(() => {
+    if (!onReconnect || !accessToken) return;
+    return onReconnect(() => {
+      const showing = incomingRef.current;
+      if (!showing) return;
+      callService.get(accessToken, showing.id).then(
+        (latest) => {
+          if (incomingRef.current?.id !== latest.id) return;
+          const me = latest.participants.find((p) => p.userId === myId);
+          const stillRinging = latest.state === "ringing" && (me?.state === "invited" || me?.state === "ringing");
+          if (!stillRinging) updateIncoming(null);
+        },
+        () => undefined // Can't tell right now: keep ringing; the ring timeout still applies server-side.
+      );
+    });
+  }, [onReconnect, accessToken, myId, updateIncoming]);
 
   // Best effort: leave the call if the tab is closed mid-call.
   useEffect(() => {

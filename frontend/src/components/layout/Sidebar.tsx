@@ -91,7 +91,7 @@ export function Sidebar() {
           <LogoutIcon />
         </button>
         <NavLink to="/app/profile" aria-label="Your profile">
-          <Avatar name={user?.displayName ?? "?"} size="sm" />
+          <Avatar name={user?.displayName ?? "?"} imageUrl={user?.avatarUrl ?? undefined} size="sm" />
         </NavLink>
       </div>
     </nav>

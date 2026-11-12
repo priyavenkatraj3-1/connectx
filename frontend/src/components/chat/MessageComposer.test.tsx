@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthProvider } from "../../context/AuthContext";
@@ -255,5 +255,19 @@ describe("MessageComposer — mentions, replies and edits", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("You do not have access to this conversation");
     expect(screen.getByLabelText("Message")).toHaveValue("hello?");
+  });
+
+  it("inserts an emoji from the picker at the caret", async () => {
+    const user = userEvent.setup();
+    renderComposer();
+    const textarea = screen.getByPlaceholderText(/message/i) as HTMLTextAreaElement;
+    await user.type(textarea, "See you");
+    textarea.setSelectionRange(3, 3);
+
+    await user.click(screen.getByRole("button", { name: "Insert emoji" }));
+    await user.click(within(screen.getByRole("dialog", { name: "Insert emoji" })).getByRole("button", { name: "👋" }));
+
+    expect(textarea.value).toBe("See👋 you");
+    expect(screen.queryByRole("dialog", { name: "Insert emoji" })).not.toBeInTheDocument();
   });
 });

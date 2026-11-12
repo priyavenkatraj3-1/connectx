@@ -85,6 +85,7 @@ export function fakePeerFactory(config: RTCConfiguration): RTCPeerConnection {
 /** A realtime channel the test drives: `emit` delivers server events, `sent` records client events. */
 export function createFakeRealtime(connectionId = "11111111-1111-4111-8111-111111111111") {
   const listeners = new Set<(event: ServerEvent) => void>();
+  const reconnectListeners = new Set<() => void>();
   const sent: ClientEvent[] = [];
   const value: RealtimeContextValue = {
     subscribe(listener) {
@@ -96,6 +97,10 @@ export function createFakeRealtime(connectionId = "11111111-1111-4111-8111-11111
       return true;
     },
     connectionId,
+    onReconnect(listener) {
+      reconnectListeners.add(listener);
+      return () => reconnectListeners.delete(listener);
+    },
   };
   return {
     value,
@@ -103,6 +108,12 @@ export function createFakeRealtime(connectionId = "11111111-1111-4111-8111-11111
     emit(event: ServerEvent) {
       act(() => {
         for (const listener of listeners) listener(event);
+      });
+    },
+    /** Simulates the socket coming back after an unexpected drop. */
+    reconnect() {
+      act(() => {
+        for (const listener of reconnectListeners) listener();
       });
     },
   };

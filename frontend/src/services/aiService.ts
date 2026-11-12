@@ -13,6 +13,7 @@ import type {
   ScamCheckResult,
   TranslationResult,
   VoiceResult,
+  VoiceTranslationResult,
 } from "../types/ai";
 import { apiRequest, buildQueryString } from "./apiClient";
 
@@ -149,5 +150,22 @@ export const aiService = {
   async analyzeVoice(accessToken: string, attachmentId: string): Promise<VoiceResult> {
     const { result } = await apiRequest<{ result: VoiceResult }>(`/ai/voice/${attachmentId}/analyze`, { method: "POST", accessToken });
     return result;
+  },
+
+  /** Your stored translations of your transcript (sends nothing to a provider). */
+  async listVoiceTranslations(accessToken: string, attachmentId: string): Promise<VoiceTranslationResult[]> {
+    const { translations } = await apiRequest<{ translations: VoiceTranslationResult[] }>(`/ai/voice/${attachmentId}/translations`, {
+      accessToken,
+    });
+    return translations;
+  },
+
+  async translateVoice(accessToken: string, attachmentId: string, targetLanguage: string): Promise<VoiceTranslationResult> {
+    const { translation } = await apiRequest<{ translation: VoiceTranslationResult }>(`/ai/voice/${attachmentId}/translate`, {
+      method: "POST",
+      body: { targetLanguage },
+      accessToken,
+    });
+    return translation;
   },
 };

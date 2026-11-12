@@ -30,6 +30,8 @@ vi.mock("../../services/aiService", () => ({
     safetyFeedback: vi.fn(),
     createMemory: vi.fn(),
     getVoice: vi.fn(),
+    listVoiceTranslations: vi.fn(() => Promise.resolve([])),
+    translateVoice: vi.fn(),
   },
 }));
 
@@ -193,22 +195,75 @@ describe("MessageAITools", () => {
     expect(aiService.translate).not.toHaveBeenCalled();
   });
 
-  it("translates on request into the preferred language, keeping the original", async () => {
-    vi.mocked(aiService.getSettings).mockResolvedValue(aiSettingsResponse());
-    vi.mocked(aiService.translate).mockResolvedValue({
-      messageId: "msg-1",
-      targetLanguage: "es",
-      translatedText: "Hi, shall we meet tomorrow?",
-      detectedSourceLanguage: "es",
+  describe("text translation target language", () => {
+    const englishMessage: MessageDTO = { ...message, id: "msg-en", body: "See you tomorrow" };
+    const result = (targetLanguage: string, translatedText: string, detectedSourceLanguage: string | null = "en") => ({
+      messageId: "msg-en",
+      targetLanguage,
+      translatedText,
+      detectedSourceLanguage,
       cached: false,
-      generatedBy: { provider: "anthropic", model: "claude-opus-5" },
+      generatedBy: { provider: "gemini", model: "gemini-3.5-flash-lite" },
     });
-    wrap(<MessageAITools message={message} isOwn={false} />);
 
-    await userEvent.click(await screen.findByRole("button", { name: "Translate" }));
+    it("offers exactly Tamil, English, Hindi, Telugu and Malayalam, defaulting to Tamil when the preferred language isn't one of them", async () => {
+      vi.mocked(aiService.getSettings).mockResolvedValue(aiSettingsResponse({ preferredLanguage: "es" }));
+      vi.mocked(aiService.translate).mockResolvedValue(result("ta", "நாளை சந்திப்போம்"));
+      wrap(<MessageAITools message={englishMessage} isOwn={false} />);
 
-    expect(await screen.findByText("Hi, shall we meet tomorrow?")).toBeInTheDocument();
-    expect(aiService.translate).toHaveBeenCalledWith("test-access-token", "msg-1", "es");
+      const picker = await screen.findByRole("combobox", { name: "Translate message to" });
+      expect([...(picker as HTMLSelectElement).options].map((o) => o.value)).toEqual(["ta", "en", "hi", "te", "ml"]);
+      expect(picker).toHaveValue("ta");
+
+      await userEvent.click(screen.getByRole("button", { name: "Translate" }));
+
+      expect(aiService.translate).toHaveBeenCalledWith("test-access-token", "msg-en", "ta");
+      const panel = await screen.findByLabelText("Translation");
+      expect(panel).toHaveTextContent("நாளை சந்திப்போம்");
+      expect(panel).toHaveTextContent("Translated to Tamil from en");
+      // The original message is left as it was; the translation is shown separately.
+      expect(englishMessage.body).toBe("See you tomorrow");
+    });
+
+    it("defaults to the preferred language when it's one of the five and differs from the source", async () => {
+      vi.mocked(aiService.getSettings).mockResolvedValue(aiSettingsResponse({ preferredLanguage: "hi" }));
+      vi.mocked(aiService.translate).mockResolvedValue(result("hi", "कल मिलते हैं"));
+      wrap(<MessageAITools message={englishMessage} isOwn={false} />);
+
+      expect(await screen.findByRole("combobox", { name: "Translate message to" })).toHaveValue("hi");
+      await userEvent.click(screen.getByRole("button", { name: "Translate" }));
+
+      expect(aiService.translate).toHaveBeenCalledWith("test-access-token", "msg-en", "hi");
+      expect(await screen.findByText("कल मिलते हैं")).toBeInTheDocument();
+    });
+
+    it("sends the language the user picks", async () => {
+      vi.mocked(aiService.getSettings).mockResolvedValue(aiSettingsResponse({ preferredLanguage: "en" }));
+      vi.mocked(aiService.translate).mockResolvedValue(result("ml", "നാളെ കാണാം"));
+      wrap(<MessageAITools message={englishMessage} isOwn={false} />);
+
+      // English is preferred but the text is (assumed) English, so the default is Tamil, not a no-op English → English.
+      const picker = await screen.findByRole("combobox", { name: "Translate message to" });
+      expect(picker).toHaveValue("ta");
+      await userEvent.selectOptions(picker, "ml");
+      await userEvent.click(screen.getByRole("button", { name: "Translate" }));
+
+      expect(aiService.translate).toHaveBeenCalledWith("test-access-token", "msg-en", "ml");
+      expect(await screen.findByText("നാളെ കാണാം")).toBeInTheDocument();
+    });
+
+    it("says the message is already in the chosen language instead of repeating it", async () => {
+      vi.mocked(aiService.getSettings).mockResolvedValue(aiSettingsResponse({ preferredLanguage: "en" }));
+      vi.mocked(aiService.translate).mockResolvedValue(result("en", "See you tomorrow"));
+      wrap(<MessageAITools message={englishMessage} isOwn={false} />);
+
+      await userEvent.selectOptions(await screen.findByRole("combobox", { name: "Translate message to" }), "en");
+      await userEvent.click(screen.getByRole("button", { name: "Translate" }));
+
+      expect(aiService.translate).toHaveBeenCalledWith("test-access-token", "msg-en", "en");
+      expect(await screen.findByText("This message is already in English. Choose another language.")).toBeInTheDocument();
+      expect(screen.queryByLabelText("Translation")).not.toBeInTheDocument();
+    });
   });
 
   it("shows a local scam warning with an explanation, and records a dismissal", async () => {

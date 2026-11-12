@@ -1,5 +1,5 @@
 import type { AttachmentDTO, AttachmentKind } from "../types/media";
-import { API_BASE_URL, ApiError, apiRequest, buildQueryString, reportUnauthorized } from "./apiClient";
+import { API_BASE_URL, ApiError, apiRequest, buildQueryString, refreshAfterUnauthorized, reportUnauthorized } from "./apiClient";
 
 /**
  * Client-side mirror of the backend allow-list (backend/src/modules/media/
@@ -77,41 +77,66 @@ export function precheckStatusFile(file: File): string | null {
   return kind === "image" || kind === "video" ? null : "A status can only be a photo or a video";
 }
 
+const uploadCancelled = () => new ApiError("Upload cancelled", 0);
+
 function uploadRaw(
   accessToken: string,
   query: Record<string, string | undefined>,
   file: File,
   onProgress?: (fraction: number) => void
 ): UploadHandle {
-  const xhr = new XMLHttpRequest();
+  let xhr: XMLHttpRequest | null = null;
+  let aborted = false;
 
-  const promise = new Promise<AttachmentDTO>((resolve, reject) => {
-    xhr.open("POST", `${API_BASE_URL}/media${buildQueryString(query)}`);
-    xhr.setRequestHeader("Authorization", `Bearer ${accessToken}`);
-    xhr.setRequestHeader("Content-Type", "application/octet-stream");
+  const send = (token: string) =>
+    new Promise<AttachmentDTO>((resolve, reject) => {
+      const request = new XMLHttpRequest();
+      xhr = request;
+      request.open("POST", `${API_BASE_URL}/media${buildQueryString(query)}`);
+      request.setRequestHeader("Authorization", `Bearer ${token}`);
+      request.setRequestHeader("Content-Type", "application/octet-stream");
 
-    xhr.upload.onprogress = (event) => {
-      if (event.lengthComputable && onProgress) onProgress(event.loaded / event.total);
-    };
-    xhr.onload = () => {
-      let data: { attachment?: AttachmentDTO; error?: { message?: string } } = {};
-      try {
-        data = JSON.parse(xhr.responseText) as typeof data;
-      } catch {
-        // Non-JSON error body; fall through to the generic message.
-      }
-      if (xhr.status >= 200 && xhr.status < 300 && data.attachment) {
-        resolve(data.attachment);
-      } else {
-        reject(new ApiError(data.error?.message ?? "Upload failed. Please try again.", xhr.status));
-      }
-    };
-    xhr.onerror = () => reject(new ApiError("Upload failed — check your connection and try again.", 0));
-    xhr.onabort = () => reject(new ApiError("Upload cancelled", 0));
-    xhr.send(file);
+      request.upload.onprogress = (event) => {
+        if (event.lengthComputable && onProgress) onProgress(event.loaded / event.total);
+      };
+      request.onload = () => {
+        let data: { attachment?: AttachmentDTO; error?: { message?: string; code?: unknown } } = {};
+        try {
+          data = JSON.parse(request.responseText) as typeof data;
+        } catch {
+          // Non-JSON error body; fall through to the generic message.
+        }
+        if (request.status >= 200 && request.status < 300 && data.attachment) {
+          resolve(data.attachment);
+        } else {
+          const code = typeof data.error?.code === "string" ? data.error.code : undefined;
+          reportUnauthorized(request.status, code);
+          reject(new ApiError(data.error?.message ?? "Upload failed. Please try again.", request.status, code));
+        }
+      };
+      request.onerror = () => reject(new ApiError("Upload failed — check your connection and try again.", 0));
+      request.onabort = () => reject(uploadCancelled());
+      request.send(file);
+    });
+
+  const promise = send(accessToken).catch(async (err: unknown) => {
+    // Cancelled by the user (possibly while this upload was being retried): report the cancellation, not the 401.
+    if (aborted) throw uploadCancelled();
+    if (!(err instanceof ApiError)) throw err;
+    // Access token expired before/while uploading: refresh once and resend the file.
+    const refreshed = await refreshAfterUnauthorized(err.status, err.code, accessToken);
+    if (aborted) throw uploadCancelled();
+    if (!refreshed) throw err;
+    return send(refreshed);
   });
 
-  return { promise, abort: () => xhr.abort() };
+  return {
+    promise,
+    abort: () => {
+      aborted = true;
+      xhr?.abort();
+    },
+  };
 }
 
 export const mediaService = {

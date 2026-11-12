@@ -1,6 +1,16 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useAuth } from "../../context/AuthContext";
-import { ACCEPTED_FILE_EXTENSIONS, formatFileSize, guessKind, mediaService, precheckFile, type UploadHandle } from "../../services/mediaService";
+import { useTypingNotifier } from "../../hooks/useTyping";
+import { useVoiceRecorder } from "../../hooks/useVoiceRecorder";
+import {
+  ACCEPTED_FILE_EXTENSIONS,
+  formatFileSize,
+  guessKind,
+  MAX_UPLOAD_BYTES,
+  mediaService,
+  precheckFile,
+  type UploadHandle,
+} from "../../services/mediaService";
 import { isNetworkError } from "../../services/apiClient";
 import { messageService } from "../../services/messageService";
 import type { AttachmentDTO, AttachmentKind } from "../../types/media";
@@ -8,7 +18,9 @@ import type { MessageDTO, MessageMention } from "../../types/message";
 import type { QuickReply } from "../../types/productivity";
 import { describeMessageContent } from "../../utils/conversationDisplay";
 import { Button } from "../ui/Button";
-import { BoltIcon, ClockIcon, CloseIcon, FileIcon, PaperclipIcon, SendIcon } from "../ui/icons";
+import { BoltIcon, ClockIcon, CloseIcon, FileIcon, MicIcon, PaperclipIcon, SendIcon, SmileIcon } from "../ui/icons";
+import { EmojiPicker } from "./EmojiPicker";
+import { VoiceRecorderBar } from "./VoiceRecorderBar";
 
 export interface MentionCandidate {
   userId: string;
@@ -81,14 +93,31 @@ export function MessageComposer({
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [pending, setPending] = useState<PendingAttachment | null>(null);
   const [isSending, setIsSending] = useState(false);
+  const [isPickingEmoji, setIsPickingEmoji] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // In-chat voice recording: a finished recording goes through the same upload → "Ready to send" → send flow as a picked file.
+  const recorder = useVoiceRecorder({
+    onRecorded: (file) => {
+      if (file.size > MAX_UPLOAD_BYTES) {
+        setError(`This recording is too large to send (limit ${Math.floor(MAX_UPLOAD_BYTES / (1024 * 1024))} MB). Record a shorter message.`);
+        return;
+      }
+      startUpload(file);
+    },
+    onError: (message) => setError(message),
+    onNotice: (message) => setNotice(message),
+  });
+  const isRecording = recorder.status !== "idle";
+  const { cancel: cancelRecording } = recorder;
 
   // Reset everything when switching conversations. Declared before the
   // edit effect so that, on mount, a message already being edited is
   // loaded *after* the reset rather than wiped by it.
   useEffect(() => {
+    cancelRecording(); // never carry a recording (or an open microphone) into another chat
     setDraft("");
     setMentions([]);
     setError(null);
@@ -96,7 +125,15 @@ export function MessageComposer({
     setScheduleAt(null);
     setShowQuickReplies(false);
     setNotice(null);
-  }, [conversationId]);
+  }, [conversationId, cancelRecording]);
+
+  // Typing indicator for the other members: on while there's unsent text, off when sent/cleared/idle.
+  // Editing an existing message isn't "typing a new message".
+  const typing = useTypingNotifier(conversationId);
+  useEffect(() => {
+    if (draft.trim() && !editing) typing.typed();
+    else typing.stop();
+  }, [draft, editing, typing]);
 
   // Entering edit mode loads the message into the composer.
   useEffect(() => {
@@ -139,6 +176,20 @@ export function MessageComposer({
     setMentionQuery(mentionCandidates.length > 0 ? activeMentionQuery(value, caret) : null);
   }
 
+  /** Inserts an emoji at the caret (replacing any selection) and puts the caret after it. */
+  function insertEmoji(emoji: string) {
+    const textarea = textareaRef.current;
+    const start = textarea?.selectionStart ?? draft.length;
+    const end = textarea?.selectionEnd ?? start;
+    const next = draft.slice(0, start) + emoji + draft.slice(end);
+    setDraft(next);
+    setIsPickingEmoji(false);
+    requestAnimationFrame(() => {
+      textarea?.focus();
+      textarea?.setSelectionRange(start + emoji.length, start + emoji.length);
+    });
+  }
+
   function pickMention(candidate: MentionCandidate) {
     const textarea = textareaRef.current;
     const caret = textarea?.selectionStart ?? draft.length;
@@ -156,7 +207,8 @@ export function MessageComposer({
   function startUpload(file: File) {
     if (!accessToken) return;
     const kind = guessKind(file.name);
-    const previewUrl = kind === "image" && typeof URL.createObjectURL === "function" ? URL.createObjectURL(file) : null;
+    // Images get a thumbnail and audio (recorded or picked) a player, so it can be checked before sending.
+    const previewUrl = (kind === "image" || kind === "audio") && typeof URL.createObjectURL === "function" ? URL.createObjectURL(file) : null;
 
     const rejection = precheckFile(file);
     if (rejection) {
@@ -199,6 +251,7 @@ export function MessageComposer({
   const attachmentReady = pending?.status === "uploaded";
   const canSend =
     !isSending &&
+    !isRecording &&
     pending?.status !== "uploading" &&
     pending?.status !== "error" &&
     (editing ? body.length > 0 || editing.contentType !== "text" : body.length > 0 || attachmentReady);
@@ -320,8 +373,12 @@ export function MessageComposer({
 
       {pending && (
         <div className="flex items-center gap-3 border-b border-slate-100 px-4 py-2 dark:border-slate-800" data-testid="pending-attachment">
-          {pending.previewUrl ? (
+          {pending.previewUrl && pending.kind === "image" ? (
             <img src={pending.previewUrl} alt="" className="h-12 w-12 shrink-0 rounded-md object-cover" />
+          ) : pending.kind === "audio" ? (
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md bg-slate-100 text-slate-500 dark:bg-slate-800">
+              <MicIcon />
+            </div>
           ) : (
             <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md bg-slate-100 text-slate-500 dark:bg-slate-800">
               <FileIcon />
@@ -332,6 +389,9 @@ export function MessageComposer({
             <p className="text-slate-400">
               {KIND_LABEL[pending.kind]} · {formatFileSize(pending.file.size)}
             </p>
+            {pending.kind === "audio" && pending.previewUrl && pending.status !== "error" && (
+              <audio src={pending.previewUrl} controls preload="metadata" className="mt-1 h-9 w-64 max-w-full" aria-label="Voice message preview" />
+            )}
             {pending.status === "uploading" && (
               <div className="mt-1 flex items-center gap-2">
                 <div
@@ -434,7 +494,15 @@ export function MessageComposer({
       )}
 
       <div className="flex items-end gap-2 p-3">
-        {!editing && (
+        {isRecording && (
+          <VoiceRecorderBar
+            status={recorder.status as "requesting" | "recording"}
+            elapsedSeconds={recorder.elapsedSeconds}
+            onStop={recorder.stop}
+            onCancel={recorder.cancel}
+          />
+        )}
+        {!editing && !isRecording && (
           <>
             <input
               ref={fileInputRef}
@@ -457,6 +525,21 @@ export function MessageComposer({
             >
               <PaperclipIcon />
             </button>
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setIsPickingEmoji((open) => !open)}
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+                aria-label="Insert emoji"
+                aria-haspopup="dialog"
+                aria-expanded={isPickingEmoji}
+              >
+                <SmileIcon />
+              </button>
+              {isPickingEmoji && (
+                <EmojiPicker label="Insert emoji" onPick={insertEmoji} onClose={() => setIsPickingEmoji(false)} className="absolute bottom-12 left-0" />
+              )}
+            </div>
             {quickReplies.length > 0 && (
               <button
                 type="button"
@@ -482,12 +565,28 @@ export function MessageComposer({
                 <ClockIcon />
               </button>
             )}
+            {pending === null && (
+              <button
+                type="button"
+                onClick={() => {
+                  setError(null);
+                  setNotice(null);
+                  void recorder.start();
+                }}
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+                aria-label="Record voice message"
+                title="Record a voice message"
+              >
+                <MicIcon />
+              </button>
+            )}
           </>
         )}
         <textarea
           ref={textareaRef}
           value={draft}
           onChange={(e) => updateDraft(e.target.value, e.target.selectionStart ?? e.target.value.length)}
+          onBlur={typing.stop}
           onKeyDown={(e) => {
             if (e.key === "Escape") {
               if (mentionQuery !== null) setMentionQuery(null);
@@ -502,11 +601,19 @@ export function MessageComposer({
             }
           }}
           rows={1}
+          hidden={isRecording}
           placeholder={pending ? "Add a caption (optional)" : "Type a message"}
           aria-label="Message"
           className="max-h-32 flex-1 resize-none rounded-lg border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 dark:border-slate-700 dark:bg-surface-dark-subtle"
         />
-        <Button type="submit" disabled={!canSend} isLoading={isSending} aria-label={editing ? "Save edit" : "Send message"}>
+        <Button
+          type="submit"
+          hidden={isRecording}
+          className={isRecording ? "hidden" : ""}
+          disabled={!canSend}
+          isLoading={isSending}
+          aria-label={editing ? "Save edit" : "Send message"}
+        >
           <SendIcon width={18} height={18} />
         </Button>
       </div>

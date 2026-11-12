@@ -14,6 +14,8 @@ export interface AIServerStatus {
   provider: { name: string; configured: boolean; model: string | null };
   transcription: { name: string; configured: boolean };
   supportedLanguages: Array<{ code: string; name: string }>;
+  /** Target languages for voice message translation (Tamil, English, Hindi, Telugu, Malayalam). */
+  voiceTranslationLanguages: Array<{ code: string; name: string }>;
   dataSharing: string[];
 }
 
@@ -155,5 +157,16 @@ export interface VoiceResult {
   summary: string | null;
   actionItems: string[];
   errorMessage: string | null;
+  updatedAt: string;
+}
+
+/** A translation of your own transcript of a voice message. The audio and transcript are never changed. */
+export interface VoiceTranslationResult {
+  attachmentId: string;
+  targetLanguage: string;
+  translatedText: string;
+  detectedSourceLanguage: string | null;
+  cached: boolean;
+  generatedBy: AIGeneratedBy | null;
   updatedAt: string;
 }

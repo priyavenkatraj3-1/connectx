@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Avatar } from "../../components/ui/Avatar";
 import { Button } from "../../components/ui/Button";
 import { ErrorState } from "../../components/common/ErrorState";
+import { ProfilePhotoControl } from "../../components/profile/ProfilePhotoControl";
 import { Input } from "../../components/ui/Input";
 import { LoadingState } from "../../components/common/LoadingState";
 import { useAuth } from "../../context/AuthContext";
@@ -9,7 +10,7 @@ import { userService } from "../../services/userService";
 import type { OwnProfile } from "../../types/user";
 
 export function ProfileView() {
-  const { accessToken } = useAuth();
+  const { accessToken, updateUser } = useAuth();
   const [profile, setProfile] = useState<OwnProfile | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -48,6 +49,7 @@ export function ProfileView() {
         statusMessage: statusMessage.trim() || null,
       });
       setProfile(updated);
+      updateUser({ displayName: updated.displayName, avatarUrl: updated.avatarUrl });
       setIsEditing(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save profile");
@@ -111,6 +113,11 @@ export function ProfileView() {
                   Save
                 </Button>
               </div>
+            </div>
+          )}
+          {!isEditing && (
+            <div className="mt-4 border-t border-slate-100 pt-4 dark:border-slate-800">
+              <ProfilePhotoControl profile={profile} onChange={setProfile} />
             </div>
           )}
         </div>

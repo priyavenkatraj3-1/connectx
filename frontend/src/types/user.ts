@@ -5,6 +5,11 @@ export interface PublicProfile {
   statusMessage: string | null;
 }
 
+/** GET /users/:id — `bio` is present only if you share a chat with this person (the server decides). */
+export interface ContactProfile extends PublicProfile {
+  bio?: string | null;
+}
+
 export interface OwnProfile {
   id: string;
   email: string;

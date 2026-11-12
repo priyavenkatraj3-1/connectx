@@ -1,4 +1,4 @@
-import type { MessageDTO, MessagePage, SendMessageOptions } from "../types/message";
+import type { MessageDTO, MessagePage, MessageReactionSummary, SendMessageOptions } from "../types/message";
 import { apiRequest, buildQueryString, generateUuid, NetworkError } from "./apiClient";
 
 export const messageService = {
@@ -53,6 +53,24 @@ export const messageService = {
 
   remove(accessToken: string, conversationId: string, messageId: string): Promise<void> {
     return apiRequest<void>(`/messages/${conversationId}/${messageId}`, { method: "DELETE", accessToken });
+  },
+
+  /** Messages in this chat containing `query` (case-insensitive), newest first (at most 30). */
+  async search(accessToken: string, conversationId: string, query: string): Promise<MessageDTO[]> {
+    const { results } = await apiRequest<{ results: MessageDTO[] }>(`/messages/${conversationId}/search${buildQueryString({ q: query })}`, {
+      accessToken,
+    });
+    return results;
+  },
+
+  /** Sets your reaction (replacing any previous one), or removes it with `null`. Resolves to the message's reactions. */
+  async react(accessToken: string, conversationId: string, messageId: string, emoji: string | null): Promise<MessageReactionSummary[]> {
+    const { reactions } = await apiRequest<{ reactions: MessageReactionSummary[] }>(`/messages/${conversationId}/${messageId}/reaction`, {
+      method: emoji ? "PUT" : "DELETE",
+      body: emoji ? { emoji } : undefined,
+      accessToken,
+    });
+    return reactions;
   },
 
   markRead(accessToken: string, conversationId: string, upToMessageId: string): Promise<void> {

@@ -38,6 +38,16 @@ export interface MessageDTO {
   attachment?: AttachmentDTO | null;
   /** Phase 6: the sender's idempotency key (matches an offline-queued message to the stored one). */
   clientMessageId?: string | null;
+  /** Emoji reactions, one per person (optional: absent in older cached/offline copies). */
+  reactions?: MessageReactionSummary[];
+  /** Set when this message replied to a status — a snapshot, since statuses expire. */
+  statusReply?: { statusId: string; type: "text" | "image" | "video"; preview: string | null } | null;
+}
+
+export interface MessageReactionSummary {
+  emoji: string;
+  count: number;
+  userIds: string[];
 }
 
 export interface MessagePage {

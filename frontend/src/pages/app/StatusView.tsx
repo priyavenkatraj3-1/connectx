@@ -42,7 +42,7 @@ function StatusRing({ name, avatarUrl, seen, count }: { name: string; avatarUrl:
 
 export function StatusView() {
   const { accessToken, user } = useAuth();
-  const { subscribe } = useRealtime();
+  const { subscribe, onReconnect } = useRealtime();
   const [data, setData] = useState<StatusListResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
@@ -62,6 +62,9 @@ export function StatusView() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Views (Seen counts), new and deleted statuses missed while the socket was down aren't replayed.
+  useEffect(() => onReconnect?.(() => void load()), [onReconnect, load]);
 
   useEffect(() => {
     const timer = setInterval(() => setData((current) => (current ? withoutExpired(current) : current)), EXPIRY_CHECK_MS);
@@ -117,6 +120,14 @@ export function StatusView() {
           : current
       );
       void statusService.markViewed(accessToken, statusId).catch(() => undefined);
+    },
+    [accessToken]
+  );
+
+  const replyToStatus = useCallback(
+    async (statusId: string, body: string) => {
+      if (!accessToken) return;
+      await statusService.reply(accessToken, statusId, body);
     },
     [accessToken]
   );
@@ -180,10 +191,10 @@ export function StatusView() {
             <div className="flex items-center gap-3 rounded-xl px-3 py-2">
               {data.mine.length > 0 ? (
                 <button type="button" onClick={() => setViewer({ kind: "mine" })} aria-label="View my status">
-                  <StatusRing name={user?.displayName ?? "Me"} avatarUrl={null} seen count={data.mine.length} />
+                  <StatusRing name={user?.displayName ?? "Me"} avatarUrl={user?.avatarUrl ?? null} seen count={data.mine.length} />
                 </button>
               ) : (
-                <Avatar name={user?.displayName ?? "Me"} size="md" />
+                <Avatar name={user?.displayName ?? "Me"} imageUrl={user?.avatarUrl ?? undefined} size="md" />
               )}
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-medium text-slate-900 dark:text-slate-100">My status</p>
@@ -257,6 +268,7 @@ export function StatusView() {
           isOwn={false}
           onClose={closeViewer}
           onViewed={markViewed}
+          onReply={replyToStatus}
         />
       )}
     </div>

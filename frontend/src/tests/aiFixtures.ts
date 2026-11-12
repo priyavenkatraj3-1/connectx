@@ -29,6 +29,13 @@ export function aiSettingsResponse(
       { code: "en", name: "English" },
       { code: "es", name: "Spanish" },
     ],
+    voiceTranslationLanguages: [
+      { code: "ta", name: "Tamil" },
+      { code: "en", name: "English" },
+      { code: "hi", name: "Hindi" },
+      { code: "te", name: "Telugu" },
+      { code: "ml", name: "Malayalam" },
+    ],
     dataSharing: ["Translation sends only the one message you ask to translate."],
   };
 }

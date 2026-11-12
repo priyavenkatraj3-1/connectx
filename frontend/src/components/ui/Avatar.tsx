@@ -1,3 +1,6 @@
+import { useEffect, useState } from "react";
+import { API_BASE_URL } from "../../services/apiClient";
+
 interface AvatarProps {
   name: string;
   size?: "sm" | "md" | "lg";
@@ -16,13 +19,29 @@ function getInitials(name: string): string {
   return initials.join("") || "?";
 }
 
+/**
+ * Uploaded profile pictures are stored as a server path
+ * ("/api/v1/users/<id>/avatar/<avatarId>"); the API may live on another
+ * origin than the app, so resolve them against the API. External http(s)
+ * URLs are used as they are.
+ */
+export function resolveAvatarUrl(url: string): string {
+  if (!url.startsWith("/api/")) return url;
+  return new URL(url, new URL(API_BASE_URL, window.location.href)).toString();
+}
+
 export function Avatar({ name, size = "md", imageUrl }: AvatarProps) {
-  if (imageUrl) {
+  // A picture that fails to load (removed, offline, bad external link) falls back to initials.
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  useEffect(() => setFailedUrl(null), [imageUrl]);
+
+  if (imageUrl && failedUrl !== imageUrl) {
     return (
       <img
-        src={imageUrl}
+        src={resolveAvatarUrl(imageUrl)}
         alt={name}
-        className={`${SIZE_CLASSES[size]} rounded-full object-cover`}
+        onError={() => setFailedUrl(imageUrl)}
+        className={`${SIZE_CLASSES[size]} shrink-0 rounded-full object-cover`}
       />
     );
   }

@@ -2,6 +2,8 @@ export interface AuthUser {
   id: string;
   email: string;
   displayName: string;
+  /** Your profile picture. Not part of sign-in responses: filled in from your profile once the app loads. */
+  avatarUrl?: string | null;
 }
 
 export interface AuthTokens {

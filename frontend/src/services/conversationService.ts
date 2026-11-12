@@ -1,4 +1,4 @@
-import type { ConversationSummary } from "../types/conversation";
+import type { ChatPreferences, ConversationSummary, MuteOption } from "../types/conversation";
 import { apiRequest } from "./apiClient";
 
 interface ConversationRef {
@@ -11,6 +11,20 @@ export const conversationService = {
       accessToken,
     });
     return conversations;
+  },
+
+  /** Your own pin/archive/mute settings for a chat. */
+  async updatePreferences(
+    accessToken: string,
+    conversationId: string,
+    changes: { pinned?: boolean; archived?: boolean; mute?: MuteOption }
+  ): Promise<ChatPreferences> {
+    const { preferences } = await apiRequest<{ preferences: ChatPreferences }>(`/conversations/${conversationId}/preferences`, {
+      method: "PATCH",
+      body: changes,
+      accessToken,
+    });
+    return preferences;
   },
 
   async createDirect(accessToken: string, otherUserId: string): Promise<ConversationRef> {

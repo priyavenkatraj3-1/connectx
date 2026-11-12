@@ -213,3 +213,89 @@ describe("MessageBubble", () => {
     });
   });
 });
+
+describe("MessageBubble — reactions", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    seedAuthenticatedSession();
+  });
+  afterEach(cleanup);
+
+  const withReactions: MessageDTO = {
+    ...base,
+    reactions: [
+      { emoji: "👍", count: 2, userIds: ["user-1", "user-3"] },
+      { emoji: "😂", count: 1, userIds: ["user-3"] },
+    ],
+  };
+
+  it("shows each emoji with its count and marks yours", () => {
+    renderBubble(withReactions, { onReact: vi.fn().mockResolvedValue(undefined) });
+    const group = screen.getByLabelText("Reactions");
+    expect(within(group).getByRole("button", { name: "👍 2 reactions, including yours" })).toHaveAttribute("aria-pressed", "true");
+    expect(within(group).getByRole("button", { name: "😂 1 reaction" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("clicking your reaction removes it; clicking another switches to it", async () => {
+    const onReact = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderBubble(withReactions, { onReact });
+
+    await user.click(screen.getByRole("button", { name: /👍 2 reactions/ }));
+    expect(onReact).toHaveBeenLastCalledWith(withReactions, null);
+    await user.click(screen.getByRole("button", { name: /😂 1 reaction/ }));
+    expect(onReact).toHaveBeenLastCalledWith(withReactions, "😂");
+  });
+
+  it("reacts from the picker (quick row and full grid), and Escape closes it", async () => {
+    const onReact = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderBubble(base, { onReact });
+
+    await user.click(screen.getByRole("button", { name: "Add reaction" }));
+    const picker = screen.getByRole("dialog", { name: "Add reaction" });
+    await user.click(within(within(picker).getByRole("group", { name: "Quick reactions" })).getByRole("button", { name: "❤️" }));
+    expect(onReact).toHaveBeenCalledWith(base, "❤️");
+    expect(screen.queryByRole("dialog", { name: "Add reaction" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Add reaction" }));
+    await user.click(within(screen.getByRole("group", { name: "All emoji" })).getByRole("button", { name: "🎉" }));
+    expect(onReact).toHaveBeenLastCalledWith(base, "🎉");
+
+    await user.click(screen.getByRole("button", { name: "Add reaction" }));
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "Add reaction" })).not.toBeInTheDocument();
+  });
+
+  it("shows the server's error if a reaction fails, and offers no controls without onReact", async () => {
+    const user = userEvent.setup();
+    renderBubble(withReactions, { onReact: vi.fn().mockRejectedValue(new Error("Message not found")) });
+    await user.click(screen.getByRole("button", { name: /😂 1 reaction/ }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Message not found");
+    cleanup();
+
+    renderBubble(withReactions);
+    expect(screen.queryByRole("button", { name: "Add reaction" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /😂 1 reaction/ })).toBeDisabled();
+  });
+});
+
+describe("MessageBubble — status replies", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    seedAuthenticatedSession();
+  });
+  afterEach(cleanup);
+
+  it("shows which status a message replied to, from either side", () => {
+    renderBubble({ ...base, body: "Have fun", statusReply: { statusId: "s1", type: "text", preview: "Climbing day!" } });
+    const quote = screen.getByLabelText("Status reply");
+    expect(quote).toHaveTextContent("Replied to your status");
+    expect(quote).toHaveTextContent("Climbing day!");
+    cleanup();
+
+    renderBubble({ ...base, senderId: "user-1", body: "Gorgeous", statusReply: { statusId: "s2", type: "image", preview: null } });
+    expect(screen.getByLabelText("Status reply")).toHaveTextContent("You replied to their status");
+    expect(screen.getByLabelText("Status reply")).toHaveTextContent("Photo");
+  });
+});

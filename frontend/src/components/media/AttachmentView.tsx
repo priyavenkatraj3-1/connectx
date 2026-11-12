@@ -4,7 +4,7 @@ import { useAttachmentUrl } from "../../hooks/useAttachmentUrl";
 import { useEscapeKey } from "../../hooks/useEscapeKey";
 import { formatFileSize } from "../../services/mediaService";
 import type { AttachmentDTO } from "../../types/media";
-import { CloseIcon, DownloadIcon, FileIcon } from "../ui/icons";
+import { CloseIcon, DownloadIcon, EyeIcon, FileIcon } from "../ui/icons";
 
 interface AttachmentViewProps {
   attachment: AttachmentDTO;
@@ -79,6 +79,66 @@ function ImagePreview({ url, attachment, onClose }: { url: string; attachment: A
   );
 }
 
+/** PDFs can be previewed in the app; Office documents are download-only (see docs/api.md, Media). */
+export function isPreviewablePdf(attachment: AttachmentDTO): boolean {
+  return attachment.mimeType === "application/pdf";
+}
+
+/**
+ * In-app PDF preview. The bytes were fetched through the authenticated API
+ * and are shown from a blob: URL by the browser's own PDF viewer — the file
+ * never goes to a third-party viewer and no public link is created. Some
+ * mobile browsers can't show PDFs inline, hence the download fallback.
+ */
+function PdfPreview({ url, attachment, onClose }: { url: string; attachment: AttachmentDTO; onClose(): void }) {
+  useEscapeKey(onClose);
+  return createPortal(
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Preview of ${attachment.originalFilename}`}
+      className="fixed inset-0 z-50 flex flex-col items-center gap-3 bg-black/85 p-4"
+      onClick={onClose}
+    >
+      <div className="flex w-full max-w-5xl items-center justify-between gap-2 text-white" onClick={(e) => e.stopPropagation()}>
+        <p className="truncate text-sm font-medium">{attachment.originalFilename}</p>
+        <div className="flex shrink-0 gap-1">
+          <button
+            type="button"
+            onClick={() => triggerDownload(url, attachment.originalFilename)}
+            className="flex h-9 w-9 items-center justify-center rounded-lg hover:bg-white/10"
+            aria-label={`Download ${attachment.originalFilename}`}
+          >
+            <DownloadIcon width={20} height={20} />
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-9 w-9 items-center justify-center rounded-lg hover:bg-white/10"
+            aria-label="Close preview"
+          >
+            <CloseIcon width={20} height={20} />
+          </button>
+        </div>
+      </div>
+      <iframe
+        src={url}
+        title={`PDF preview: ${attachment.originalFilename}`}
+        className="w-full max-w-5xl flex-1 rounded-lg bg-white"
+        onClick={(e) => e.stopPropagation()}
+      />
+      <p className="text-xs text-white/60" onClick={(e) => e.stopPropagation()}>
+        Preview not showing? Your browser may not display PDFs inline —{" "}
+        <button type="button" className="underline" onClick={() => triggerDownload(url, attachment.originalFilename)}>
+          download it instead
+        </button>
+        .
+      </p>
+    </div>,
+    document.body
+  );
+}
+
 function InlineMedia({ attachment, isOwn }: AttachmentViewProps) {
   const { status, url, error, reload } = useAttachmentUrl(attachment.id);
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -123,31 +183,39 @@ function InlineMedia({ attachment, isOwn }: AttachmentViewProps) {
 function FileCard({ attachment, isOwn }: AttachmentViewProps) {
   const [requested, setRequested] = useState(false);
   const { status, url, error, reload } = useAttachmentUrl(attachment.id, requested);
-  const downloadWhenReady = useRef(false);
+  /** What to do once the bytes have loaded: save them, or open the PDF preview. */
+  const whenReady = useRef<"download" | "preview" | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const canPreview = isPreviewablePdf(attachment);
 
   useEffect(() => {
-    if (status === "ready" && url && downloadWhenReady.current) {
-      downloadWhenReady.current = false;
-      triggerDownload(url, attachment.originalFilename);
+    if (status === "ready" && url && whenReady.current) {
+      if (whenReady.current === "download") triggerDownload(url, attachment.originalFilename);
+      else setPreviewOpen(true);
+      whenReady.current = null;
     }
-    if (status === "error") downloadWhenReady.current = false;
+    if (status === "error") whenReady.current = null;
   }, [status, url, attachment.originalFilename]);
 
-  function handleClick() {
+  function request(action: "download" | "preview") {
     if (status === "ready" && url) {
-      triggerDownload(url, attachment.originalFilename);
+      if (action === "download") triggerDownload(url, attachment.originalFilename);
+      else setPreviewOpen(true);
       return;
     }
-    if (status === "loading") return;
-    downloadWhenReady.current = true;
+    if (status === "loading") {
+      whenReady.current = action;
+      return;
+    }
+    whenReady.current = action;
     if (status === "error") reload();
     else setRequested(true);
   }
 
-  return (
+  const card = (
     <button
       type="button"
-      onClick={handleClick}
+      onClick={() => request("download")}
       aria-busy={status === "loading"}
       aria-label={`Download ${attachment.originalFilename}`}
       className={`flex w-64 max-w-full items-center gap-3 rounded-lg p-2.5 text-left ${
@@ -172,6 +240,25 @@ function FileCard({ attachment, isOwn }: AttachmentViewProps) {
         )}
       </span>
     </button>
+  );
+
+  if (!canPreview) return card;
+  return (
+    <div className="flex items-center gap-1">
+      {card}
+      <button
+        type="button"
+        onClick={() => request("preview")}
+        className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${
+          isOwn ? "text-white/80 hover:bg-white/15" : "text-slate-500 hover:bg-slate-200 dark:hover:bg-slate-700"
+        }`}
+        aria-label={`Preview ${attachment.originalFilename}`}
+        title="Preview"
+      >
+        <EyeIcon width={18} height={18} />
+      </button>
+      {previewOpen && url && <PdfPreview url={url} attachment={attachment} onClose={() => setPreviewOpen(false)} />}
+    </div>
   );
 }
 

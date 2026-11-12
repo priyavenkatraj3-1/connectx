@@ -102,4 +102,20 @@ describe("StatusView", () => {
     realtime.emit({ type: "status:created", statusId: "new", userId: "user-2" });
     await waitFor(() => expect(statusService.list).toHaveBeenCalledTimes(2));
   });
+
+  it("after the socket reconnects, reloads so views missed while offline show up", async () => {
+    const mine = { ...status("m1", "user-1", "My update", { viewedByMe: true }), visibility: "contacts" as const, audienceUserIds: [], viewCount: 1 };
+    vi.mocked(statusService.list).mockResolvedValueOnce({ ...structuredClone(listResponse), mine: [mine] });
+    const realtime = renderView();
+    await screen.findByText(/· 1 views/);
+
+    const later: StatusListResponse = structuredClone(listResponse);
+    later.mine = [{ ...mine, viewCount: 3 }];
+    vi.mocked(statusService.list).mockResolvedValueOnce(later);
+    const callsBefore = vi.mocked(statusService.list).mock.calls.length;
+    realtime.reconnect();
+
+    await screen.findByText(/· 3 views/);
+    expect(vi.mocked(statusService.list).mock.calls.length).toBe(callsBefore + 1);
+  });
 });

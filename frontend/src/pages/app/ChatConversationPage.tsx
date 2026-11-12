@@ -11,10 +11,12 @@ import { OutboxBubbles } from "../../components/chat/OutboxBubbles";
 import { ConversationToolsPanel } from "../../components/collaboration/ConversationToolsPanel";
 import { ErrorState } from "../../components/common/ErrorState";
 import { LoadingState } from "../../components/common/LoadingState";
+import { ContactInfoPanel } from "../../components/chat/ContactInfoPanel";
+import { MessageSearchPanel } from "../../components/chat/MessageSearchPanel";
 import { GroupDetailsPanel } from "../../components/groups/GroupDetailsPanel";
 import { ItemFormModal, type ItemKind } from "../../components/productivity/ItemFormModal";
 import { Avatar } from "../../components/ui/Avatar";
-import { BackIcon, BookmarkIcon, InfoIcon, NoteIcon, PhoneIcon, PinIcon, SparkleIcon, StarIcon, VideoIcon } from "../../components/ui/icons";
+import { BackIcon, BookmarkIcon, InfoIcon, NoteIcon, PhoneIcon, PinIcon, SearchIcon, SparkleIcon, StarIcon, VideoIcon } from "../../components/ui/icons";
 import { useOptionalAI } from "../../context/AIContext";
 import { useAuth } from "../../context/AuthContext";
 import { useOptionalCalls } from "../../context/CallContext";
@@ -22,6 +24,7 @@ import { useConversations } from "../../context/ConversationsContext";
 import { useOptionalOffline } from "../../context/OfflineContext";
 import { useRealtime } from "../../context/RealtimeContext";
 import { useOptionalWorkspace } from "../../context/WorkspaceContext";
+import { describeTyping, useTypingUsers } from "../../hooks/useTyping";
 import { useMessageOrganization } from "../../hooks/useMessageOrganization";
 import { useSafetyScan } from "../../hooks/useSafetyScan";
 import { isNetworkError } from "../../services/apiClient";
@@ -33,12 +36,13 @@ import { isLiveCall, type CallDTO, type CallHistoryEntryDTO } from "../../types/
 import type { GroupDetails } from "../../types/group";
 import type { MessageDTO } from "../../types/message";
 import { getConversationAvatarUrl, getConversationTitle } from "../../utils/conversationDisplay";
+import { reconcileLatestPage } from "../../utils/messageResync";
 
 export function ChatConversationPage() {
   const { conversationId } = useParams<{ conversationId: string }>();
   const { accessToken, user } = useAuth();
   const { getConversation, markConversationRead, removeConversation, isLoading: conversationsLoading } = useConversations();
-  const { subscribe } = useRealtime();
+  const { subscribe, onReconnect } = useRealtime();
   const navigate = useNavigate();
 
   const [messages, setMessages] = useState<MessageDTO[]>([]);
@@ -54,6 +58,7 @@ export function ChatConversationPage() {
   const [activeGroupCall, setActiveGroupCall] = useState<CallDTO | null>(null);
   const [isAIPanelOpen, setIsAIPanelOpen] = useState(false);
   const [isToolsPanelOpen, setIsToolsPanelOpen] = useState(false);
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [creating, setCreating] = useState<{ kind: ItemKind; message: MessageDTO } | null>(null);
   const [showingCachedMessages, setShowingCachedMessages] = useState(false);
   const scrollAnchorRef = useRef<HTMLDivElement>(null);
@@ -79,6 +84,7 @@ export function ChatConversationPage() {
     setIsGroupPanelOpen(false);
     setIsAIPanelOpen(false);
     setIsToolsPanelOpen(false);
+    setIsSearchOpen(false);
     setCreating(null);
     setGroupDetails(null);
     setCallHistory([]);
@@ -120,6 +126,35 @@ export function ChatConversationPage() {
       cancelled = true;
     };
   }, [accessToken, conversationId, offlineCache, reloadKey]);
+
+  // After the socket reconnects, pick up messages, edits and receipts sent
+  // while it was down (they aren't replayed) — see reconcileLatestPage.
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+  const resyncSeqRef = useRef(0);
+  useEffect(() => {
+    if (!onReconnect || !accessToken || !conversationId) return;
+    let cancelled = false;
+    const unsubscribe = onReconnect(() => {
+      const seq = ++resyncSeqRef.current;
+      messageService
+        .list(accessToken, conversationId)
+        .then((page) => {
+          // Another chat is open now, or a newer resync superseded this one: drop the stale response.
+          if (cancelled || seq !== resyncSeqRef.current) return;
+          // Until this chat's first load lands, state may still hold the previous chat's messages.
+          const shown = messagesRef.current.filter((m) => m.conversationId === conversationId);
+          const result = reconcileLatestPage(shown, page);
+          setMessages(result.messages);
+          if (result.hasMore !== null) setHasMoreHistory(result.hasMore);
+        })
+        .catch(() => undefined); // Keep what's shown; the next event or reload will catch up.
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [onReconnect, accessToken, conversationId]);
 
   // Keep this device's snapshot of the conversation current while online.
   useEffect(() => {
@@ -200,6 +235,9 @@ export function ChatConversationPage() {
           setReplyingTo((current) => (current?.id === event.messageId ? null : current));
           setEditing((current) => (current?.id === event.messageId ? null : current));
           break;
+        case "message:reactions":
+          setMessages((prev) => prev.map((m) => (m.id === event.messageId ? { ...m, reactions: event.reactions } : m)));
+          break;
         case "message:delivered":
           setMessages((prev) =>
             prev.map((m) => (m.id === event.messageId && m.status === "sent" ? { ...m, status: "delivered" } : m))
@@ -237,10 +275,17 @@ export function ChatConversationPage() {
   }, [subscribe, conversationId, user?.id, loadGroupDetails, loadCalls]);
 
   // Mark newly-loaded/arrived messages as read while this conversation is open.
+  // Only when the latest message changes — not on every receipt/edit update to the list.
+  const lastMarkedReadRef = useRef<string | null>(null);
   useEffect(() => {
     if (!conversationId || messages.length === 0 || removedReason || showingCachedMessages) return;
     const lastMessage = messages[messages.length - 1]!;
-    void markConversationRead(conversationId, lastMessage.id).catch(() => undefined);
+    const key = `${conversationId}:${lastMessage.id}`;
+    if (lastMarkedReadRef.current === key) return;
+    lastMarkedReadRef.current = key;
+    void markConversationRead(conversationId, lastMessage.id).catch(() => {
+      if (lastMarkedReadRef.current === key) lastMarkedReadRef.current = null; // let the next update retry
+    });
   }, [conversationId, messages, markConversationRead, removedReason, showingCachedMessages]);
 
   useEffect(() => {
@@ -264,6 +309,15 @@ export function ChatConversationPage() {
     [accessToken, conversationId]
   );
 
+  const handleReact = useCallback(
+    async (message: MessageDTO, emoji: string | null) => {
+      if (!accessToken || !conversationId) return;
+      const reactions = await messageService.react(accessToken, conversationId, message.id, emoji);
+      setMessages((prev) => prev.map((m) => (m.id === message.id ? { ...m, reactions } : m)));
+    },
+    [accessToken, conversationId]
+  );
+
   const handleLeft = useCallback(() => {
     if (!conversationId) return;
     removeConversation(conversationId);
@@ -281,6 +335,8 @@ export function ChatConversationPage() {
     const messageItems = messages.map((message) => ({ kind: "message" as const, at: new Date(message.createdAt).getTime(), message }));
     return [...messageItems, ...callItems].sort((a, b) => a.at - b.at);
   }, [messages, callHistory, hasMoreHistory]);
+
+  const typingUserIds = useTypingUsers(conversationId);
 
   if (conversationsLoading && !conversation) {
     return <LoadingState label="Loading conversation…" />;
@@ -301,6 +357,7 @@ export function ChatConversationPage() {
     (conversation?.otherParticipant ? [{ userId: conversation.otherParticipant.id, displayName: conversation.otherParticipant.displayName }] : []);
   const isFocused = !!conversationId && !!workspace?.focusedConversationIds.includes(conversationId);
   const outboxItems = offline && conversationId ? offline.outbox.filter((item) => item.conversationId === conversationId) : [];
+  const loadedMessageIds = new Set(messages.map((m) => m.id));
   const jumpToMessage = (messageId: string) => {
     document.querySelector(`[data-message-id="${messageId}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" });
   };
@@ -311,9 +368,27 @@ export function ChatConversationPage() {
         }
       : undefined;
 
+  const typingText = describeTyping(
+    typingUserIds.map(
+      (id) =>
+        groupDetails?.members.find((m) => m.userId === id)?.displayName ??
+        (conversation?.otherParticipant?.id === id ? conversation.otherParticipant.displayName : "Someone")
+    )
+  );
+
+  // Info side panel: group details for groups, contact info for direct chats (the same slot).
+  const otherParticipant = !isGroup ? conversation?.otherParticipant : null;
+  const canOpenInfo = !removedReason && (isGroup ? !!groupDetails : !!otherParticipant);
+  const toggleInfoPanel = () => {
+    setIsAIPanelOpen(false);
+    setIsToolsPanelOpen(false);
+    setIsSearchOpen(false);
+    setIsGroupPanelOpen((open) => !open);
+  };
+
   return (
     <div className="flex flex-1 overflow-hidden">
-      <div className={`flex flex-1 flex-col ${isGroupPanelOpen || isAIPanelOpen || isToolsPanelOpen ? "hidden md:flex" : "flex"}`}>
+      <div className={`flex flex-1 flex-col ${isGroupPanelOpen || isAIPanelOpen || isToolsPanelOpen || isSearchOpen ? "hidden md:flex" : "flex"}`}>
         <header className="flex items-center gap-3 border-b border-slate-200 px-5 py-3 dark:border-slate-800">
           <Link
             to="/app"
@@ -322,20 +397,44 @@ export function ChatConversationPage() {
           >
             <BackIcon />
           </Link>
-          <Avatar name={title} imageUrl={conversation ? getConversationAvatarUrl(conversation) : undefined} size="sm" />
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{title}</p>
-            {isGroup && memberCount !== undefined && (
-              <p className="truncate text-xs text-slate-400">
-                {memberCount} {memberCount === 1 ? "member" : "members"}
-              </p>
-            )}
-            {!isGroup && conversation?.otherParticipant?.statusMessage && (
-              <p className="truncate text-xs text-slate-400">{conversation.otherParticipant.statusMessage}</p>
-            )}
-          </div>
+          <button
+            type="button"
+            onClick={canOpenInfo ? toggleInfoPanel : undefined}
+            disabled={!canOpenInfo}
+            className="flex min-w-0 flex-1 items-center gap-3 rounded-lg text-left enabled:hover:bg-slate-50 disabled:cursor-default dark:enabled:hover:bg-slate-800/50"
+            aria-label={canOpenInfo ? `${isGroup ? "Group info" : "Contact info"}: ${title}` : undefined}
+          >
+            <Avatar name={title} imageUrl={conversation ? getConversationAvatarUrl(conversation) : undefined} size="sm" />
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{title}</p>
+              {isGroup && memberCount !== undefined && (
+                <p className="truncate text-xs text-slate-400">
+                  {memberCount} {memberCount === 1 ? "member" : "members"}
+                </p>
+              )}
+              {!isGroup && conversation?.otherParticipant?.statusMessage && (
+                <p className="truncate text-xs text-slate-400">{conversation.otherParticipant.statusMessage}</p>
+              )}
+            </div>
+          </button>
           {calls && conversationId && !removedReason && (conversation?.type === "direct" || conversation?.type === "group") && (
             <CallButtons conversationId={conversationId} disabled={!!activeGroupCall} />
+          )}
+          {conversationId && !removedReason && !showingCachedMessages && (
+            <button
+              type="button"
+              onClick={() => {
+                setIsGroupPanelOpen(false);
+                setIsAIPanelOpen(false);
+                setIsToolsPanelOpen(false);
+                setIsSearchOpen((open) => !open);
+              }}
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+              aria-label="Search messages"
+              aria-expanded={isSearchOpen}
+            >
+              <SearchIcon />
+            </button>
           )}
           {workspace && conversationId && !removedReason && (
             <>
@@ -354,6 +453,7 @@ export function ChatConversationPage() {
                 onClick={() => {
                   setIsGroupPanelOpen(false);
                   setIsAIPanelOpen(false);
+                  setIsSearchOpen(false);
                   setIsToolsPanelOpen((open) => !open);
                 }}
                 className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
@@ -371,6 +471,7 @@ export function ChatConversationPage() {
               onClick={() => {
                 setIsGroupPanelOpen(false);
                 setIsToolsPanelOpen(false);
+                setIsSearchOpen(false);
                 setIsAIPanelOpen((open) => !open);
               }}
               className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
@@ -380,16 +481,12 @@ export function ChatConversationPage() {
               <SparkleIcon />
             </button>
           )}
-          {isGroup && groupDetails && !removedReason && (
+          {canOpenInfo && (
             <button
               type="button"
-              onClick={() => {
-                setIsAIPanelOpen(false);
-                setIsToolsPanelOpen(false);
-                setIsGroupPanelOpen((open) => !open);
-              }}
+              onClick={toggleInfoPanel}
               className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
-              aria-label="Group info"
+              aria-label={isGroup ? "Group info" : "Contact info"}
               aria-expanded={isGroupPanelOpen}
             >
               <InfoIcon />
@@ -451,6 +548,7 @@ export function ChatConversationPage() {
                   setEditing(m);
                 }}
                 onDelete={handleDelete}
+                onReact={showingCachedMessages ? undefined : handleReact}
                 aiSlot={
                   ai ? (
                     <MessageAITools
@@ -500,6 +598,12 @@ export function ChatConversationPage() {
           <div ref={scrollAnchorRef} />
         </div>
 
+        {typingText && !removedReason && (
+          <p className="px-5 pb-1 text-xs italic text-slate-500 dark:text-slate-400" aria-live="polite">
+            {typingText}
+          </p>
+        )}
+
         {removedReason ? (
           <p className="border-t border-slate-200 p-4 text-center text-sm text-slate-500 dark:border-slate-800">
             {removedReason === "left"
@@ -529,12 +633,29 @@ export function ChatConversationPage() {
         )}
       </div>
 
-      {isGroupPanelOpen && groupDetails && (
+      {isGroupPanelOpen && isGroup && groupDetails && (
         <GroupDetailsPanel
           details={groupDetails}
           onChange={setGroupDetails}
           onLeft={handleLeft}
           onClose={() => setIsGroupPanelOpen(false)}
+        />
+      )}
+      {isGroupPanelOpen && !isGroup && otherParticipant && (
+        <ContactInfoPanel
+          userId={otherParticipant.id}
+          fallback={{ displayName: otherParticipant.displayName, avatarUrl: otherParticipant.avatarUrl, statusMessage: otherParticipant.statusMessage }}
+          onClose={() => setIsGroupPanelOpen(false)}
+        />
+      )}
+
+      {isSearchOpen && conversationId && !removedReason && (
+        <MessageSearchPanel
+          key={conversationId}
+          conversationId={conversationId}
+          loadedMessageIds={loadedMessageIds}
+          onJumpToMessage={jumpToMessage}
+          onClose={() => setIsSearchOpen(false)}
         />
       )}
 

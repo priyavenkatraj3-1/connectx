@@ -4,10 +4,11 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthProvider } from "../../context/AuthContext";
 import { ConversationsProvider } from "../../context/ConversationsContext";
-import { RealtimeProvider } from "../../context/RealtimeContext";
+import { RealtimeContext, RealtimeProvider } from "../../context/RealtimeContext";
 import { conversationService } from "../../services/conversationService";
 import { groupService } from "../../services/groupService";
 import { messageService } from "../../services/messageService";
+import { createFakeRealtime } from "../../tests/fakeWebRtc";
 import { seedAuthenticatedSession } from "../../tests/testAuth";
 import type { ConversationSummary } from "../../types/conversation";
 import type { GroupDetails } from "../../types/group";
@@ -121,6 +122,85 @@ describe("ChatConversationPage — groups", () => {
     // Others' messages are labelled with the sender; your own aren't.
     expect(screen.getByText("Grace Hopper")).toBeInTheDocument();
     expect(screen.queryByText("Test User")).not.toBeInTheDocument();
+  });
+
+  it("after the socket reconnects, refetches the chat list and picks up messages missed while offline", async () => {
+    const realtime = createFakeRealtime();
+    render(
+      <AuthProvider>
+        <RealtimeContext.Provider value={realtime.value}>
+          <ConversationsProvider>
+            <MemoryRouter initialEntries={["/app/chat/conv-g1"]}>
+              <Routes>
+                <Route path="/app/chat/:conversationId" element={<ChatConversationPage />} />
+              </Routes>
+            </MemoryRouter>
+          </ConversationsProvider>
+        </RealtimeContext.Provider>
+      </AuthProvider>
+    );
+    await waitFor(() => expect(screen.getByText("Chapter 3 tonight?")).toBeInTheDocument());
+    const listCalls = vi.mocked(conversationService.list).mock.calls.length;
+
+    const missed: MessageDTO = { ...messages[0]!, id: "m3", body: "Sent while you were disconnected", createdAt: new Date(Date.now() + 1000).toISOString() };
+    vi.mocked(messageService.list).mockResolvedValue({ items: [...messages, missed], hasMore: false });
+    realtime.reconnect();
+
+    await waitFor(() => expect(screen.getByText("Sent while you were disconnected")).toBeInTheDocument());
+    expect(screen.getAllByText("Chapter 3 tonight?")).toHaveLength(1);
+    expect(vi.mocked(conversationService.list).mock.calls.length).toBeGreaterThan(listCalls);
+  });
+
+  it("offers voice recording to group members, and takes it away once you're removed", async () => {
+    const realtime = createFakeRealtime();
+    render(
+      <AuthProvider>
+        <RealtimeContext.Provider value={realtime.value}>
+          <ConversationsProvider>
+            <MemoryRouter initialEntries={["/app/chat/conv-g1"]}>
+              <Routes>
+                <Route path="/app/chat/:conversationId" element={<ChatConversationPage />} />
+              </Routes>
+            </MemoryRouter>
+          </ConversationsProvider>
+        </RealtimeContext.Provider>
+      </AuthProvider>
+    );
+    await waitFor(() => expect(screen.getByText("Chapter 3 tonight?")).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Record voice message" })).toBeInTheDocument();
+
+    realtime.emit({ type: "conversation:removed", conversationId: "conv-g1", reason: "removed" });
+    expect(await screen.findByText(/You were removed from this group/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Record voice message" })).not.toBeInTheDocument();
+  });
+
+  it("marks the chat read once per new latest message, not on every receipt update", async () => {
+    vi.mocked(messageService.markRead).mockClear();
+    const realtime = createFakeRealtime();
+    render(
+      <AuthProvider>
+        <RealtimeContext.Provider value={realtime.value}>
+          <ConversationsProvider>
+            <MemoryRouter initialEntries={["/app/chat/conv-g1"]}>
+              <Routes>
+                <Route path="/app/chat/:conversationId" element={<ChatConversationPage />} />
+              </Routes>
+            </MemoryRouter>
+          </ConversationsProvider>
+        </RealtimeContext.Provider>
+      </AuthProvider>
+    );
+    await waitFor(() => expect(messageService.markRead).toHaveBeenCalledWith("test-access-token", "conv-g1", "m2"));
+    expect(messageService.markRead).toHaveBeenCalledTimes(1);
+    vi.mocked(messageService.markRead).mockClear();
+
+    realtime.emit({ type: "message:status", conversationId: "conv-g1", messageIds: ["m2"], status: "delivered" });
+    realtime.emit({ type: "message:read", conversationId: "conv-g1", userId: "user-2", upToMessageId: "m2" });
+    expect(messageService.markRead).not.toHaveBeenCalled();
+
+    realtime.emit({ type: "message:new", conversationId: "conv-g1", message: { ...messages[0]!, id: "m4", body: "New one" } });
+    await waitFor(() => expect(messageService.markRead).toHaveBeenCalledWith("test-access-token", "conv-g1", "m4"));
+    expect(messageService.markRead).toHaveBeenCalledTimes(1);
   });
 
   it("opens the group info panel with the member list", async () => {

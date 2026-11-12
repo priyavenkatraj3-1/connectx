@@ -61,6 +61,28 @@ export function reportUnauthorized(status: number, code: string | undefined): vo
   if (status === 401 && isSessionEndedCode(code)) sessionEndedHandler?.(code!);
 }
 
+/**
+ * Exchanges the refresh token for a new access token (AuthContext registers
+ * it). Lets a request that failed only because its access token expired —
+ * e.g. after the computer slept past the scheduled refresh — be retried once
+ * instead of surfacing "Invalid or expired token" to the user.
+ */
+let accessTokenRefresher: (() => Promise<string | null>) | null = null;
+export function setAccessTokenRefresher(refresher: (() => Promise<string | null>) | null): void {
+  accessTokenRefresher = refresher;
+}
+
+/**
+ * For a 401 that isn't a session-ended code: a fresh access token to retry
+ * with, or null if there is none (no refresher, refresh failed, or the
+ * refresh produced the same token that was just rejected).
+ */
+export async function refreshAfterUnauthorized(status: number, code: string | undefined, rejectedToken: string): Promise<string | null> {
+  if (status !== 401 || isSessionEndedCode(code) || !accessTokenRefresher) return null;
+  const refreshed = await accessTokenRefresher();
+  return refreshed && refreshed !== rejectedToken ? refreshed : null;
+}
+
 interface RequestOptions {
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: unknown;
@@ -68,6 +90,19 @@ interface RequestOptions {
 }
 
 export async function apiRequest<TResponse>(path: string, options: RequestOptions = {}): Promise<TResponse> {
+  try {
+    return await sendRequest<TResponse>(path, options);
+  } catch (err) {
+    // An expired access token is rejected by requireAuth before the handler
+    // runs, so retrying once with a refreshed token can't apply a write twice.
+    if (!options.accessToken || !(err instanceof ApiError)) throw err;
+    const refreshed = await refreshAfterUnauthorized(err.status, err.code, options.accessToken);
+    if (!refreshed) throw err;
+    return sendRequest<TResponse>(path, { ...options, accessToken: refreshed });
+  }
+}
+
+async function sendRequest<TResponse>(path: string, options: RequestOptions): Promise<TResponse> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };

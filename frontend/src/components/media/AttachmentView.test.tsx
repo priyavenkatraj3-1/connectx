@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthProvider } from "../../context/AuthContext";
@@ -268,6 +268,53 @@ describe("AttachmentView", () => {
       expect(await screen.findByText("You do not have access to this attachment")).toBeInTheDocument();
       expect(refresh).not.toHaveBeenCalled();
       expect(fetchContent).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe("PDF preview", () => {
+    it("fetches the PDF through the authenticated API and shows it in-app from a blob: URL", async () => {
+      fetchContent.mockResolvedValue(new Blob(["%PDF-1.7"], { type: "application/pdf" }));
+      const downloads = captureDownloads();
+      const user = userEvent.setup();
+      renderAttachments(pdf());
+
+      await user.click(screen.getByRole("button", { name: "Preview Q3 report.pdf" }));
+      const dialog = await screen.findByRole("dialog", { name: "Preview of Q3 report.pdf" });
+      const frame = within(dialog).getByTitle("PDF preview: Q3 report.pdf");
+      expect(frame.getAttribute("src")).toMatch(/^blob:/);
+      expect(fetchContent).toHaveBeenCalledWith("test-access-token", "att-pdf");
+      expect(downloads).toEqual([]); // previewing doesn't download
+
+      await user.click(within(dialog).getByRole("button", { name: "Download Q3 report.pdf" }));
+      expect(downloads).toEqual([{ href: frame.getAttribute("src"), download: "Q3 report.pdf" }]);
+
+      await user.keyboard("{Escape}");
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+      // Re-opening reuses the bytes already loaded.
+      await user.click(screen.getByRole("button", { name: "Preview Q3 report.pdf" }));
+      expect(await screen.findByRole("dialog")).toBeInTheDocument();
+      expect(fetchContent).toHaveBeenCalledTimes(1);
+    });
+
+    it("doesn't open a preview when the file can't be loaded", async () => {
+      fetchContent.mockRejectedValue(new ApiError("You do not have access to this conversation", 403));
+      const user = userEvent.setup();
+      renderAttachments(pdf());
+      await user.click(screen.getByRole("button", { name: "Preview Q3 report.pdf" }));
+      await waitFor(() => expect(fetchContent).toHaveBeenCalled());
+      expect(await screen.findByText(/You do not have access/)).toBeInTheDocument();
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    it("offers no preview for Office documents or other files (download only)", () => {
+      renderAttachments(
+        attachment({ id: "d1", kind: "document", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", originalFilename: "notes.docx" }),
+        attachment({ id: "d2", kind: "document", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", originalFilename: "budget.xlsx" }),
+        attachment({ id: "d3", kind: "document", mimeType: "text/plain", originalFilename: "todo.txt" })
+      );
+      expect(screen.queryByRole("button", { name: /^Preview/ })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Download notes.docx" })).toBeInTheDocument();
     });
   });
 });

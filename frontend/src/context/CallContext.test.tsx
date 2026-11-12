@@ -201,6 +201,39 @@ describe("CallContext + call UI", () => {
       expect(screen.getByRole("dialog", { name: "Video call with Grace Hopper" })).toBeInTheDocument();
     });
 
+    it("after a reconnect, stops ringing for a call that ended while offline, but keeps one that's still ringing", async () => {
+      const { realtime } = renderCalls();
+      const dialog = () => screen.queryByRole("alertdialog", { name: "Incoming video call from Grace Hopper" });
+
+      realtime.emit({ type: "call:invite", call: incoming });
+      vi.mocked(callService.get).mockResolvedValueOnce(incoming); // still ringing for us
+      realtime.reconnect();
+      await waitFor(() => expect(callService.get).toHaveBeenCalledWith("test-access-token", "call-9"));
+      expect(dialog()).toBeInTheDocument();
+
+      vi.mocked(callService.get).mockResolvedValueOnce({ ...incoming, state: "cancelled" }); // the caller gave up meanwhile
+      realtime.reconnect();
+      await waitFor(() => expect(dialog()).not.toBeInTheDocument());
+
+      // Answered on another device while this one was offline → stop ringing too.
+      realtime.emit({ type: "call:invite", call: incoming });
+      vi.mocked(callService.get).mockResolvedValueOnce({
+        ...incoming,
+        state: "accepted",
+        participants: [participant("user-2", "Grace Hopper", "initiator", "joined"), participant("user-1", "Test User", "invitee", "joined")],
+      });
+      realtime.reconnect();
+      await waitFor(() => expect(dialog()).not.toBeInTheDocument());
+    });
+
+    it("a replayed invite for a call already ringing doesn't ring twice", () => {
+      const { realtime } = renderCalls();
+      realtime.emit({ type: "call:invite", call: incoming });
+      realtime.emit({ type: "call:invite", call: incoming });
+      expect(screen.getAllByRole("alertdialog")).toHaveLength(1);
+      expect(realtime.sent.filter((e) => e.type === "call:ring")).toHaveLength(1);
+    });
+
     it("declines", async () => {
       const user = userEvent.setup();
       const { realtime } = renderCalls();

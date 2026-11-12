@@ -20,6 +20,15 @@ export interface ConversationGroupSummary {
   myRole: GroupRole;
 }
 
+/** How long to mute: 8 hours, a week, until unmuted, or unmute now. */
+export type MuteOption = "8h" | "1w" | "always" | "off";
+
+export interface ChatPreferences {
+  pinned: boolean;
+  archived: boolean;
+  mutedUntil: string | null;
+}
+
 export interface ConversationSummary {
   id: string;
   type: "direct" | "group";
@@ -30,4 +39,9 @@ export interface ConversationSummary {
   lastMessage: LastMessagePreview | null;
   unreadCount: number;
   updatedAt: string;
+  /** Your own list preferences (optional: absent in chats cached before this existed). */
+  pinned?: boolean;
+  archived?: boolean;
+  /** Muted until this time, or null/absent when not muted. */
+  mutedUntil?: string | null;
 }

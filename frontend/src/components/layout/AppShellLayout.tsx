@@ -6,6 +6,7 @@ import { OfflineProvider, useOptionalOffline } from "../../context/OfflineContex
 import { WorkspaceProvider } from "../../context/WorkspaceContext";
 import { CallOverlay } from "../calls/CallOverlay";
 import { WifiOffIcon } from "../ui/icons";
+import { useOwnProfileSync } from "../../hooks/useOwnProfileSync";
 import { Sidebar } from "./Sidebar";
 
 function OfflineBanner() {
@@ -21,6 +22,7 @@ function OfflineBanner() {
 }
 
 export function AppShellLayout() {
+  useOwnProfileSync();
   return (
     <OfflineProvider>
       <ConversationsProvider>

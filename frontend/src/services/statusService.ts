@@ -28,6 +28,16 @@ export const statusService = {
     await apiRequest(`/statuses/${statusId}/view`, { method: "POST", accessToken });
   },
 
+  /** Replies to someone's status; it arrives as a direct message to them. */
+  async reply(accessToken: string, statusId: string, body: string): Promise<{ conversationId: string }> {
+    const { conversationId } = await apiRequest<{ conversationId: string }>(`/statuses/${statusId}/reply`, {
+      method: "POST",
+      body: { body },
+      accessToken,
+    });
+    return { conversationId };
+  },
+
   async viewers(accessToken: string, statusId: string): Promise<StatusViewerDTO[]> {
     const { viewers } = await apiRequest<{ viewers: StatusViewerDTO[] }>(`/statuses/${statusId}/viewers`, { accessToken });
     return viewers;

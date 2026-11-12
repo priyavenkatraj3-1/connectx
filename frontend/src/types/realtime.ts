@@ -1,6 +1,7 @@
 import type { CallDTO, IceCandidatePayload } from "./call";
+import type { PublicProfile } from "./user";
 import type { GroupDTO, GroupRole } from "./group";
-import type { MessageDTO, MessageStatus } from "./message";
+import type { MessageDTO, MessageReactionSummary, MessageStatus } from "./message";
 import type {
   AppNotification,
   BusinessProfile,
@@ -20,6 +21,12 @@ import type {
 /** Mirrors backend/src/realtime/events.ts — keep the two in sync. */
 export type ServerEvent =
   | { type: "message:new"; conversationId: string; message: MessageDTO }
+  /** Someone you share a chat with (or you, on another device) changed their name, status or picture. */
+  | { type: "user:updated"; user: PublicProfile }
+  | { type: "conversation:preferences"; conversationId: string; pinned: boolean; archived: boolean; mutedUntil: string | null }
+  | { type: "message:reactions"; conversationId: string; messageId: string; reactions: MessageReactionSummary[] }
+  /** Another member started/stopped typing (never sent to the typist). */
+  | { type: "typing"; conversationId: string; userId: string; isTyping: boolean }
   | { type: "message:delivered"; conversationId: string; messageId: string; userId: string }
   | { type: "message:read"; conversationId: string; userId: string; upToMessageId: string }
   | { type: "conversation:updated"; conversationId: string }
@@ -111,4 +118,5 @@ export type CallClientEvent =
 export type ClientEvent =
   | { type: "ping" }
   | { type: "message:read"; conversationId: string; upToMessageId: string }
+  | { type: "typing"; conversationId: string; isTyping: boolean }
   | CallClientEvent;

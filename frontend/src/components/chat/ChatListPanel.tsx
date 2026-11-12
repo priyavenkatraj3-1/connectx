@@ -9,7 +9,8 @@ import { ErrorState } from "../common/ErrorState";
 import { LoadingState } from "../common/LoadingState";
 import { Avatar } from "../ui/Avatar";
 import { NewGroupModal } from "../groups/NewGroupModal";
-import { ChatIcon, PlusIcon, SearchIcon, UsersIcon } from "../ui/icons";
+import { BellIcon, ChatIcon, PinIcon, PlusIcon, SearchIcon, UsersIcon } from "../ui/icons";
+import { ChatRowMenu } from "./ChatRowMenu";
 import { NewConversationModal } from "./NewConversationModal";
 import { formatTimestamp } from "../../utils/formatTime";
 import {
@@ -17,6 +18,7 @@ import {
   getConversationAvatarUrl,
   getConversationTitle,
 } from "../../utils/conversationDisplay";
+import { describeMute, isMuted, pinnedFirst } from "../../utils/chatPreferences";
 
 type ListFilter = "all" | "unread" | "groups" | "direct";
 
@@ -29,17 +31,24 @@ const LIST_FILTERS: Array<{ id: ListFilter; label: string; test(c: ConversationS
 
 export function ChatListPanel() {
   const { user } = useAuth();
-  const { conversations, isLoading, error, refresh, isShowingCached } = useConversations();
+  const { conversations, isLoading, error, refresh, isShowingCached, updatePreferences } = useConversations();
   const { conversationId: activeConversationId } = useParams();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isGroupModalOpen, setIsGroupModalOpen] = useState(false);
   const [filter, setFilter] = useState("");
   const [view, setView] = useState<ListFilter>("all");
+  const [showArchived, setShowArchived] = useState(false);
+  const [menuFor, setMenuFor] = useState<string | null>(null);
   const workspace = useOptionalWorkspace();
 
-  const visible = conversations
-    .filter((c) => getConversationTitle(c).toLowerCase().includes(filter.trim().toLowerCase()))
-    .filter((c) => LIST_FILTERS.find((f) => f.id === view)!.test(c));
+  // Archived chats live in their own view; pinned chats come first (newest activity first within each).
+  const archivedCount = conversations.filter((c) => c.archived).length;
+  const visible = pinnedFirst(
+    conversations
+      .filter((c) => !!c.archived === showArchived)
+      .filter((c) => getConversationTitle(c).toLowerCase().includes(filter.trim().toLowerCase()))
+      .filter((c) => LIST_FILTERS.find((f) => f.id === view)!.test(c))
+  );
 
   // Productivity Mode (Phase 6): the same conversations, grouped — focused first, then unread, then the rest. Nothing is hidden.
   const productivityMode = !!workspace?.preferences?.productivityMode;
@@ -113,6 +122,16 @@ export function ChatListPanel() {
           </div>
         )}
         {isShowingCached && <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">Offline — showing chats saved on this device.</p>}
+        {(archivedCount > 0 || showArchived) && (
+          <button
+            type="button"
+            onClick={() => setShowArchived((value) => !value)}
+            aria-pressed={showArchived}
+            className="mt-2 text-xs font-medium text-brand-600 hover:underline dark:text-brand-300"
+          >
+            {showArchived ? "← Back to chats" : `Archived (${archivedCount})`}
+          </button>
+        )}
       </div>
 
       <div className="flex flex-1 flex-col overflow-y-auto">
@@ -120,7 +139,11 @@ export function ChatListPanel() {
 
         {!isLoading && error && <ErrorState message={error} onRetry={() => void refresh()} />}
 
-        {!isLoading && !error && visible.length === 0 && conversations.length === 0 && (
+        {!isLoading && !error && showArchived && visible.length === 0 && (
+          <EmptyState title="No archived chats" message="Chats you archive appear here." />
+        )}
+
+        {!isLoading && !error && !showArchived && visible.length === 0 && conversations.length === 0 && (
           <EmptyState
             icon={<ChatIcon width={28} height={28} />}
             title="No conversations yet"
@@ -128,7 +151,7 @@ export function ChatListPanel() {
           />
         )}
 
-        {!isLoading && !error && visible.length === 0 && conversations.length > 0 && (
+        {!isLoading && !error && !showArchived && visible.length === 0 && conversations.length > 0 && (
           <EmptyState title="No matches" message={filter ? `No conversations match "${filter}".` : "No conversations match this filter."} />
         )}
 
@@ -144,9 +167,18 @@ export function ChatListPanel() {
             const title = getConversationTitle(conversation);
             const preview = formatLastMessagePreview(conversation, conversation.lastMessage, user?.id);
 
+            const muted = isMuted(conversation);
+
             return (
-              <NavLink
+              <div
                 key={conversation.id}
+                className="group relative"
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setMenuFor(conversation.id);
+                }}
+              >
+              <NavLink
                 to={`/app/chat/${conversation.id}`}
                 className={`flex items-center gap-3 px-4 py-3 transition-colors ${
                   isActive ? "bg-brand-50 dark:bg-brand-950" : "hover:bg-slate-100 dark:hover:bg-slate-800"
@@ -161,18 +193,42 @@ export function ChatListPanel() {
                       )}
                       <span className="truncate">{title}</span>
                     </p>
-                    <span className="shrink-0 text-xs text-slate-400">{formatTimestamp(conversation.updatedAt)}</span>
+                    <span className="flex shrink-0 items-center gap-1 text-xs text-slate-400">
+                      {conversation.pinned && <PinIcon width={12} height={12} aria-label="Pinned" />}
+                      {muted && conversation.mutedUntil && (
+                        <span title={describeMute(conversation.mutedUntil)}>
+                          <BellIcon width={12} height={12} aria-label={describeMute(conversation.mutedUntil)} className="opacity-60" />
+                        </span>
+                      )}
+                      {formatTimestamp(conversation.updatedAt)}
+                    </span>
                   </div>
                   <div className="flex items-center justify-between gap-2">
                     <p className="truncate text-sm text-slate-500 dark:text-slate-400">{preview}</p>
                     {conversation.unreadCount > 0 && (
-                      <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-brand-600 px-1.5 text-xs font-semibold text-white">
+                      <span
+                        className={`flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full px-1.5 text-xs font-semibold text-white ${
+                          muted ? "bg-slate-400 dark:bg-slate-600" : "bg-brand-600"
+                        }`}
+                      >
                         {conversation.unreadCount > 99 ? "99+" : conversation.unreadCount}
                       </span>
                     )}
                   </div>
                 </div>
+                {/* Keeps the time/badge clear of the options button. */}
+                <span className="w-6 shrink-0" aria-hidden />
               </NavLink>
+              <div className="absolute right-2 top-1/2 -translate-y-1/2">
+                <ChatRowMenu
+                  conversation={conversation}
+                  title={title}
+                  open={menuFor === conversation.id}
+                  onOpenChange={(open) => setMenuFor(open ? conversation.id : null)}
+                  onChange={(changes) => updatePreferences(conversation.id, changes)}
+                />
+              </div>
+              </div>
             );
               })}
             </div>
