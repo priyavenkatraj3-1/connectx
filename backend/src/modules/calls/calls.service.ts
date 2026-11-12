@@ -488,6 +488,32 @@ export class CallsService {
       clearTimeout(timer);
       this.disconnectTimers.delete(key);
     }
+    void this.replayRingingInvites(ctx).catch(() => undefined);
+  }
+
+  /**
+   * A device that (re)connects while someone is calling it would otherwise
+   * never ring: `call:invite` went out while it was offline. Re-send the
+   * invite to this connection only, for calls that are still ringing here
+   * (their ring timer hasn't fired — so never an expired call), where the
+   * user is still an unanswered invitee (not if another device answered or
+   * declined) and still a member of the chat, and not while they're already
+   * in another call (that call would ring out as missed, as before). The
+   * client ignores an invite for a call it's already showing.
+   */
+  async replayRingingInvites(ctx: ConnectionContext): Promise<number> {
+    const pending = await this.callsRepository.findRingingInvitesFor(ctx.userId);
+    if (pending.length === 0) return 0;
+    if ((await this.callsRepository.findLiveCallIdsJoinedBy(ctx.userId)).length > 0) return 0;
+    let replayed = 0;
+    for (const call of pending) {
+      if (!this.ringTimers.has(call.id)) continue;
+      if (!(await this.conversationsRepository.isMember(call.conversationId, ctx.userId))) continue;
+      if (this.realtimeGateway.sendToConnection(ctx.userId, ctx.connectionId, { type: "call:invite", call: this.withMediaState(call) })) {
+        replayed += 1;
+      }
+    }
+    return replayed;
   }
 
   /**

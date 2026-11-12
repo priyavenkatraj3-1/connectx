@@ -20,6 +20,7 @@ import {
   settingsUpdateSchema,
   transcribeSchema,
   translateSchema,
+  voiceTranslateSchema,
 } from "./ai.validation";
 
 /**
@@ -99,6 +100,17 @@ export function createAIRouter(services: AIServices): Router {
     asyncHandler(controller.transcribe)
   );
   router.post("/voice/:attachmentId/analyze", validateParams(attachmentParamsSchema), asyncHandler(controller.analyzeVoice));
+  router.get(
+    "/voice/:attachmentId/translations",
+    validateParams(attachmentParamsSchema),
+    asyncHandler(controller.listVoiceTranslations)
+  );
+  router.post(
+    "/voice/:attachmentId/translate",
+    validateParams(attachmentParamsSchema),
+    validateBody(voiceTranslateSchema),
+    asyncHandler(controller.translateVoice)
+  );
 
   return router;
 }

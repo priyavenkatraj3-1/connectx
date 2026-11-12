@@ -6,7 +6,7 @@ import { conversationParamsSchema } from "../messages/messages.validation";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { ConversationsController } from "./conversations.controller";
 import type { ConversationsService } from "./conversations.service";
-import { createDirectConversationSchema } from "./conversations.validation";
+import { chatPreferencesSchema, createDirectConversationSchema } from "./conversations.validation";
 
 export function createConversationsRouter(conversationsService: ConversationsService): Router {
   const controller = new ConversationsController(conversationsService);
@@ -25,6 +25,15 @@ export function createConversationsRouter(conversationsService: ConversationsSer
     validateParams(conversationParamsSchema),
     asyncHandler(requireConversationMember(conversationsService)),
     asyncHandler(controller.getById)
+  );
+
+  // Your own pin/archive/mute settings for a chat (membership is checked by the service: 404 otherwise).
+  router.patch(
+    "/:conversationId/preferences",
+    requireAuth,
+    validateParams(conversationParamsSchema),
+    validateBody(chatPreferencesSchema),
+    asyncHandler(controller.updatePreferences)
   );
 
   return router;

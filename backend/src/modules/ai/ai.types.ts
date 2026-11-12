@@ -6,7 +6,8 @@ export type AIFeature =
   | "translation"
   | "scam_shield"
   | "voice_transcription"
-  | "voice_summary";
+  | "voice_summary"
+  | "voice_translation";
 
 export interface AISettings {
   /** Master switch — nothing that uses an AI provider runs while this is off. */
@@ -105,5 +106,19 @@ export interface VoiceResultDTO {
   summary: string | null;
   actionItems: string[];
   errorMessage: string | null;
+  updatedAt: Date;
+}
+
+/** A translation of the requester's own transcript of a voice message. The audio and transcript are never changed. */
+export interface VoiceTranslationDTO {
+  attachmentId: string;
+  targetLanguage: string;
+  translatedText: string;
+  /** Language of the transcript that was translated (from transcription or the model), if known. */
+  detectedSourceLanguage: string | null;
+  /** True when served from the stored translation (no provider call). */
+  cached: boolean;
+  /** Provider and model that produced it; null when no provider was involved (cached, or already in the target language). */
+  generatedBy: AIGeneratedBy | null;
   updatedAt: Date;
 }

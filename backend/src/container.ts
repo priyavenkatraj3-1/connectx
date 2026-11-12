@@ -44,6 +44,7 @@ import { ScheduledMessagesService } from "./modules/scheduled-messages/scheduled
 import { SchedulerService } from "./modules/scheduler/scheduler.service";
 import { SessionsService } from "./modules/sessions/sessions.service";
 import { StatusesRepository } from "./modules/statuses/statuses.repository";
+import { StatusRepliesService } from "./modules/statuses/status-replies.service";
 import { StatusesService } from "./modules/statuses/statuses.service";
 import { UsersRepository } from "./modules/users/users.repository";
 import { UsersService } from "./modules/users/users.service";
@@ -93,6 +94,7 @@ export interface Container {
   mediaService: MediaService;
   callsService: CallsService;
   statusesService: StatusesService;
+  statusRepliesService: StatusRepliesService;
   ai: AIServices;
   // --- Phase 6 ---
   conversationAccess: ConversationAccessService;
@@ -142,10 +144,10 @@ export function createContainer(overrides: ContainerOverrides = {}): Container {
   const authService = new AuthService(userRepository, sessionsService, notificationsService);
 
   const usersRepository = new UsersRepository(db);
-  const usersService = new UsersService(usersRepository);
+  const usersService = new UsersService(usersRepository, storage, delegatingGateway);
 
   const conversationsRepository = new ConversationsRepository(db, usersRepository);
-  const conversationsService = new ConversationsService(conversationsRepository);
+  const conversationsService = new ConversationsService(conversationsRepository, delegatingGateway);
 
   const mediaRepository = new MediaRepository(db);
   const messagesRepository = new MessagesRepository(db, mediaRepository);
@@ -155,7 +157,7 @@ export function createContainer(overrides: ContainerOverrides = {}): Container {
     delegatingGateway,
     mediaRepository,
     storage,
-    createMentionNotifier(db, notificationsService)
+    createMentionNotifier(db, notificationsService, conversationsRepository)
   );
 
   const groupsRepository = new GroupsRepository(db);
@@ -163,6 +165,7 @@ export function createContainer(overrides: ContainerOverrides = {}): Container {
 
   const statusesRepository = new StatusesRepository(db);
   const statusesService = new StatusesService(statusesRepository, mediaRepository, usersRepository, storage, delegatingGateway);
+  const statusRepliesService = new StatusRepliesService(statusesRepository, conversationsService, messagesService);
 
   const mediaService = new MediaService(
     mediaRepository,
@@ -206,20 +209,22 @@ export function createContainer(overrides: ContainerOverrides = {}): Container {
   );
   const aiSettingsService = new AISettingsService(aiRepository, conversationsRepository, aiGateway);
   const aiContext = new AIContextService(aiRepository, { maxContextChars: aiOptions.maxContextChars ?? env.ai.maxContextChars });
+  const translationService = new TranslationService(aiSettingsService, aiRepository, messagesRepository, aiGateway);
   const ai: AIServices = {
     settings: aiSettingsService,
     ask: new AskYourChatsService(aiSettingsService, aiContext, aiRepository, aiGateway),
     memory: new AIMemoryService(aiSettingsService, aiRepository, messagesRepository),
     actions: new SmartActionsService(aiSettingsService, aiContext, aiRepository, aiGateway),
     groupDecision: new GroupDecisionService(aiSettingsService, aiContext, aiGateway),
-    translation: new TranslationService(aiSettingsService, aiRepository, messagesRepository, aiGateway),
+    translation: translationService,
     scamShield: new ScamShieldService(aiSettingsService, aiRepository, messagesRepository, aiGateway),
     voice: new VoiceIntelligenceService(
       aiSettingsService,
       aiRepository,
       mediaService,
       aiGateway,
-      aiOptions.maxAudioBytes ?? env.ai.transcription.maxAudioBytes
+      aiOptions.maxAudioBytes ?? env.ai.transcription.maxAudioBytes,
+      translationService
     ),
   };
 
@@ -262,6 +267,7 @@ export function createContainer(overrides: ContainerOverrides = {}): Container {
     mediaService,
     callsService,
     statusesService,
+    statusRepliesService,
     ai,
     conversationAccess,
     preferencesService,
@@ -280,14 +286,21 @@ export function createContainer(overrides: ContainerOverrides = {}): Container {
 }
 
 /** @mention → in-app notification for each mentioned member (respecting their notification preference). No message text is stored. */
-function createMentionNotifier(db: DatabaseClient, notifications: NotificationsService): MentionNotifier {
+function createMentionNotifier(
+  db: DatabaseClient,
+  notifications: NotificationsService,
+  conversations: ConversationsRepository
+): MentionNotifier {
   return async ({ conversationId, conversationType, messageId, senderName, mentionedUserIds }) => {
     let where = "";
     if (conversationType === "group") {
       const group = await db.query<{ name: string }>("SELECT name FROM groups WHERE conversation_id = $1", [conversationId]);
       if (group.rows[0]) where = ` in ${group.rows[0].name}`;
     }
+    // Muting a chat silences its @mention notifications (ConnectX has no push or sound notifications to mute).
+    const muted = await conversations.mutedUserIds(conversationId, mentionedUserIds);
     for (const userId of mentionedUserIds) {
+      if (muted.has(userId)) continue;
       await notifications.notify({
         userId,
         type: "mention",

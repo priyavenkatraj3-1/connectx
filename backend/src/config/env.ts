@@ -49,10 +49,19 @@ export interface EnvConfig {
   };
   /** AI provider + limits — see docs/ai.md. Keys never leave the backend. */
   ai: {
-    /** "none" (default) or "anthropic". */
+    /** "none" (default), "anthropic" or "gemini". */
     provider: string;
+    /** Anthropic key (AI_PROVIDER_API_KEY). */
     apiKey: string | undefined;
+    /** Anthropic model (AI_MODEL). */
     model: string;
+    /** Google Gemini (AI_PROVIDER=gemini). Both are required; there is deliberately no default model. */
+    gemini: {
+      /** GEMINI_API_KEY. Read only by the backend; never logged or sent to clients. */
+      apiKey: string | undefined;
+      /** GEMINI_MODEL, e.g. a current Flash-tier model id from Google AI Studio. */
+      model: string | undefined;
+    };
     /** Effort hint for providers that support one ("low" | "medium" | "high"); "default" = let the provider decide. */
     effort: string | undefined;
     /** Anthropic only: let the API re-run a request declined by the model's safety classifiers on a fallback model. */
@@ -65,11 +74,17 @@ export interface EnvConfig {
     rateLimitPerMinute: number;
     rateLimitPerDay: number;
     transcription: {
-      /** "none" (default) or "whisper-http" (any Whisper-compatible /audio/transcriptions endpoint). */
+      /**
+       * "none" (default), "whisper-http" (any Whisper-compatible /audio/transcriptions endpoint)
+       * or "gemini" (Gemini audio understanding with the existing GEMINI_API_KEY).
+       */
       provider: string;
       baseUrl: string | undefined;
       apiKey: string | undefined;
+      /** Whisper-http model (TRANSCRIPTION_MODEL). */
       model: string;
+      /** Gemini model for transcription (GEMINI_TRANSCRIPTION_MODEL); falls back to GEMINI_MODEL when unset. */
+      geminiModel: string | undefined;
       maxAudioBytes: number;
     };
   };
@@ -78,6 +93,11 @@ export interface EnvConfig {
   uploadDir: string;
   /** Where attachment bytes live (MEDIA_STORAGE): "local" disk under uploadDir (default; development) or "cloudinary" (production). */
   mediaStorage: "local" | "cloudinary";
+  /**
+   * ALLOW_LOCAL_MEDIA_STORAGE. Production refuses MEDIA_STORAGE=local unless
+   * this is true, i.e. the operator confirms the disk is persistent and backed up.
+   */
+  allowLocalMediaStorage: boolean;
   cloudinary: {
     /** CLOUDINARY_URL (cloudinary://<api_key>:<api_secret>@<cloud_name>). Required when mediaStorage is "cloudinary". */
     url: string | undefined;
@@ -100,6 +120,11 @@ export interface EnvConfig {
   };
   /** How often the Phase 6 scheduler checks for due reminders, tasks and scheduled messages. */
   schedulerIntervalMs: number;
+  /**
+   * BACKGROUND_JOBS_ENABLED. false skips startup recovery, the status sweep
+   * and the scheduler; meant only for isolated local manual testing.
+   */
+  backgroundJobsEnabled: boolean;
 }
 
 function readList(name: string): string[] {
@@ -126,6 +151,18 @@ function readNumber(name: string, fallback: number, bounds: { min?: number; max?
   if (bounds.min !== undefined && value < bounds.min) throw new Error(`Environment variable ${name} must be >= ${bounds.min}`);
   if (bounds.max !== undefined && value > bounds.max) throw new Error(`Environment variable ${name} must be <= ${bounds.max}`);
   return value;
+}
+
+/**
+ * Reads a true/false variable, failing fast on anything else so a typo can't
+ * silently keep the fallback. Exported for tests.
+ */
+export function readBoolean(name: string, fallback: boolean): boolean {
+  const raw = process.env[name]?.trim().toLowerCase();
+  if (raw === undefined || raw === "") return fallback;
+  if (raw === "true") return true;
+  if (raw === "false") return false;
+  throw new Error(`Environment variable ${name} must be "true" or "false" (got "${raw}")`);
 }
 
 function readTrustProxy(): boolean | number | string {
@@ -201,6 +238,10 @@ export const env: EnvConfig = {
     provider: (process.env.AI_PROVIDER ?? "none").trim().toLowerCase() || "none",
     apiKey: readOptional("AI_PROVIDER_API_KEY"),
     model: readOptional("AI_MODEL") ?? "claude-opus-5",
+    gemini: {
+      apiKey: readOptional("GEMINI_API_KEY"),
+      model: readOptional("GEMINI_MODEL"),
+    },
     effort: readOptional("AI_EFFORT") ?? "medium",
     refusalFallback: (process.env.AI_REFUSAL_FALLBACK ?? "true").trim().toLowerCase() !== "false",
     timeoutMs: readNumber("AI_REQUEST_TIMEOUT_MS", 60_000, { min: 1000 }),
@@ -214,12 +255,14 @@ export const env: EnvConfig = {
       baseUrl: readOptional("TRANSCRIPTION_BASE_URL"),
       apiKey: readOptional("TRANSCRIPTION_API_KEY"),
       model: readOptional("TRANSCRIPTION_MODEL") ?? "whisper-1",
+      geminiModel: readOptional("GEMINI_TRANSCRIPTION_MODEL"),
       maxAudioBytes: readNumber("TRANSCRIPTION_MAX_AUDIO_MB", 25, { min: 1 }) * 1024 * 1024,
     },
   },
   maxUploadSizeMb: readNumber("MAX_UPLOAD_SIZE_MB", 25, { min: 1, max: 1024 }),
   uploadDir: process.env.UPLOAD_DIR ?? "uploads",
   mediaStorage: readMediaStorage(),
+  allowLocalMediaStorage: readBoolean("ALLOW_LOCAL_MEDIA_STORAGE", false),
   cloudinary: {
     url: readOptional("CLOUDINARY_URL"),
     folder: readCloudinaryFolder(),
@@ -239,6 +282,7 @@ export const env: EnvConfig = {
     ringTimeoutMs: readNumber("CALL_RING_TIMEOUT_SECONDS", 45, { min: 5 }) * 1000,
   },
   schedulerIntervalMs: Math.max(5, readNumber("SCHEDULER_INTERVAL_SECONDS", 15)) * 1000,
+  backgroundJobsEnabled: readBoolean("BACKGROUND_JOBS_ENABLED", true),
 };
 
 const PLACEHOLDER_SECRET = /replace-with|changeme|change-me|^test-/i;
@@ -262,5 +306,16 @@ export function productionConfigProblems(config: EnvConfig): string[] {
   if (config.clientOrigins.length === 0) problems.push("CLIENT_ORIGIN must list the frontend's origin");
   if (config.clientOrigins.includes("*")) problems.push("CLIENT_ORIGIN must not be *");
   if (config.bcryptSaltRounds < 10) problems.push("BCRYPT_SALT_ROUNDS must be at least 10");
+  if (config.mediaStorage === "local" && !config.allowLocalMediaStorage) {
+    problems.push(
+      "MEDIA_STORAGE=local keeps uploads on this server's disk; use MEDIA_STORAGE=cloudinary, or set ALLOW_LOCAL_MEDIA_STORAGE=true if the disk is persistent and backed up"
+    );
+  }
+  // ConnectX runs behind a TLS reverse proxy in production (docs/deployment.md).
+  if (config.trustProxy === true) {
+    problems.push("TRUST_PROXY=true trusts any client-supplied X-Forwarded-For; set the number of proxy hops instead (usually 1)");
+  } else if (config.trustProxy === false || config.trustProxy === 0) {
+    problems.push("TRUST_PROXY must be set to the number of reverse-proxy hops in front of the backend (usually 1)");
+  }
   return problems;
 }

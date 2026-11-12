@@ -39,6 +39,11 @@ export const createStatusSchema = z
     }
   });
 
+/** A reply to a status is a normal direct message: same length limit as chat messages. */
+export const statusReplySchema = z.object({
+  body: z.string().trim().min(1, "Reply cannot be empty").max(4000, "Reply is too long"),
+});
+
 export const statusParamsSchema = z.object({
   statusId: z.string().uuid("statusId must be a valid ID"),
 });

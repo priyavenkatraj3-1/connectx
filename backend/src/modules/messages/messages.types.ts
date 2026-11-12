@@ -49,6 +49,24 @@ export interface MessageDTO {
    * random UUID chosen by the sender; carries no content.
    */
   clientMessageId: string | null;
+  /** Emoji reactions, one per person, in the order each emoji was first used. */
+  reactions: MessageReactionSummary[];
+  /** Set when this message is a reply to a status (a snapshot: the status itself may have expired since). */
+  statusReply: StatusReplyReference | null;
+}
+
+export interface StatusReplyReference {
+  statusId: string;
+  type: "text" | "image" | "video";
+  /** The status text or caption, shortened; null for media without a caption. */
+  preview: string | null;
+}
+
+/** One emoji on a message: how many people chose it and who (members can see each other in the chat anyway). */
+export interface MessageReactionSummary {
+  emoji: string;
+  count: number;
+  userIds: string[];
 }
 
 export interface MessagePage {
@@ -65,4 +83,6 @@ export interface SendMessageParams {
   attachmentId?: string | null;
   /** Idempotency key: re-sending with the same key returns the original message instead of a duplicate. */
   clientMessageId?: string | null;
+  /** Server-set only (StatusRepliesService), never taken from a request body. */
+  statusReply?: StatusReplyReference | null;
 }

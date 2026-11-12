@@ -1,3 +1,4 @@
+import { inspect } from "node:util";
 import { describe, expect, it } from "vitest";
 import { AIRateLimitError } from "../../src/modules/ai/ai.errors";
 import { parseJsonObject } from "../../src/modules/ai/ai.gateway";
@@ -12,6 +13,7 @@ const baseAIConfig = {
   provider: "none",
   apiKey: undefined,
   model: "claude-opus-5",
+  gemini: { apiKey: undefined as string | undefined, model: undefined as string | undefined },
   effort: "medium",
   refusalFallback: true,
   timeoutMs: 1000,
@@ -20,7 +22,14 @@ const baseAIConfig = {
   maxContextChars: 1000,
   rateLimitPerMinute: 1,
   rateLimitPerDay: 1,
-  transcription: { provider: "none", baseUrl: undefined, apiKey: undefined, model: "whisper-1", maxAudioBytes: 1 },
+  transcription: {
+    provider: "none",
+    baseUrl: undefined,
+    apiKey: undefined,
+    model: "whisper-1",
+    geminiModel: undefined as string | undefined,
+    maxAudioBytes: 1,
+  },
 };
 
 describe("provider factory", () => {
@@ -30,6 +39,22 @@ describe("provider factory", () => {
     expect(createAIProvider({ ...baseAIConfig, provider: "mystery", apiKey: "k" }).isConfigured).toBe(false);
     const anthropic = createAIProvider({ ...baseAIConfig, provider: "anthropic", apiKey: "test-key-not-real" });
     expect(anthropic).toMatchObject({ name: "anthropic", isConfigured: true, model: "claude-opus-5" });
+    // Gemini settings never affect the Anthropic provider.
+    expect(
+      createAIProvider({ ...baseAIConfig, provider: "anthropic", apiKey: "test-key-not-real", gemini: { apiKey: "g", model: "m" } })
+    ).toMatchObject({ name: "anthropic", model: "claude-opus-5" });
+
+    // Gemini needs both a key and an explicit model; missing either stays unconfigured (no guessed model).
+    expect(createAIProvider({ ...baseAIConfig, provider: "gemini" }).isConfigured).toBe(false);
+    expect(createAIProvider({ ...baseAIConfig, provider: "gemini", gemini: { apiKey: "test-key-not-real", model: undefined } }).isConfigured).toBe(false);
+    expect(createAIProvider({ ...baseAIConfig, provider: "gemini", gemini: { apiKey: undefined, model: "gemini-test-model" } }).isConfigured).toBe(false);
+    // The Anthropic key never enables Gemini.
+    expect(createAIProvider({ ...baseAIConfig, provider: "gemini", apiKey: "k", gemini: { apiKey: undefined, model: "gemini-test-model" } }).isConfigured).toBe(false);
+    const gemini = createAIProvider({ ...baseAIConfig, provider: "gemini", gemini: { apiKey: "test-key-not-real", model: "gemini-test-model" } });
+    expect(gemini).toMatchObject({ name: "gemini", isConfigured: true, model: "gemini-test-model" });
+    // Logging or serializing the provider must never reveal the key.
+    expect(JSON.stringify(gemini)).not.toContain("test-key-not-real");
+    expect(inspect(gemini, { depth: 10, showHidden: true })).not.toContain("test-key-not-real");
 
     expect(createTranscriptionProvider({ ...baseAIConfig.transcription, provider: "whisper-http" }).isConfigured).toBe(false);
     expect(

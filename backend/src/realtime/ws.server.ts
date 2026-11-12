@@ -24,6 +24,8 @@ export interface ConnectionContext {
 export interface WebSocketGatewayOptions {
   /** Called when a client reports it has read up to a given message in a conversation. */
   onClientRead: (userId: string, conversationId: string, upToMessageId: string) => Promise<void>;
+  /** Called when a client reports it started/stopped typing in a conversation. */
+  onClientTyping?: (userId: string, conversationId: string, isTyping: boolean) => Promise<void>;
   /** Called with every validated call:* event. Throwing an AppError sends its message back as `call:error`. */
   onCallEvent?: (ctx: ConnectionContext, event: CallClientEvent) => Promise<void>;
   onConnect?: (ctx: ConnectionContext) => void;
@@ -284,6 +286,11 @@ async function handleClientMessage(
   const event = parsed.event;
   if (event.type === "message:read") {
     await options.onClientRead(ctx.userId, event.conversationId, event.upToMessageId);
+    return;
+  }
+
+  if (event.type === "typing") {
+    await options.onClientTyping?.(ctx.userId, event.conversationId, event.isTyping);
     return;
   }
 

@@ -46,3 +46,28 @@ export function isSupportedLanguage(code: string): boolean {
 export function languageName(code: string): string {
   return SUPPORTED_LANGUAGES.find((language) => language.code === code)?.name ?? code;
 }
+
+/**
+ * Target languages for voice message translation, with the writing system
+ * each translation must use. Models sometimes answer Indic languages in
+ * Latin transliteration ("romanized"); naming the script in the prompt
+ * keeps the output in the language's native script.
+ */
+export const VOICE_TRANSLATION_LANGUAGES: ReadonlyArray<{ code: string; name: string; script: string }> = [
+  { code: "ta", name: "Tamil", script: "Tamil script (தமிழ்)" },
+  { code: "en", name: "English", script: "Latin script" },
+  { code: "hi", name: "Hindi", script: "Devanagari script (देवनागरी)" },
+  { code: "te", name: "Telugu", script: "Telugu script (తెలుగు)" },
+  { code: "ml", name: "Malayalam", script: "Malayalam script (മലയാളം)" },
+];
+
+const VOICE_CODES = new Set(VOICE_TRANSLATION_LANGUAGES.map((language) => language.code));
+
+export function isVoiceTranslationLanguage(code: string): boolean {
+  return VOICE_CODES.has(code);
+}
+
+/** The writing system translations into `code` must use, if ConnectX names one. */
+export function languageScript(code: string): string | null {
+  return VOICE_TRANSLATION_LANGUAGES.find((language) => language.code === code)?.script ?? null;
+}

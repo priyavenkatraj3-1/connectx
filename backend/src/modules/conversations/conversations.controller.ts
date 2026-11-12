@@ -2,7 +2,7 @@ import type { Response } from "express";
 import { AppError } from "../../middleware/errorHandler";
 import type { AuthenticatedRequest } from "../../middleware/requireAuth";
 import type { ConversationsService } from "./conversations.service";
-import type { CreateDirectConversationInput } from "./conversations.validation";
+import type { ChatPreferencesInput, CreateDirectConversationInput } from "./conversations.validation";
 
 export class ConversationsController {
   constructor(private readonly conversationsService: ConversationsService) {}
@@ -19,6 +19,15 @@ export class ConversationsController {
       otherUserId
     );
     res.status(200).json({ conversation });
+  };
+
+  updatePreferences = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    const preferences = await this.conversationsService.updateChatPreferences(
+      req.params.conversationId as string,
+      req.user!.userId,
+      req.body as ChatPreferencesInput
+    );
+    res.status(200).json({ preferences });
   };
 
   getById = async (req: AuthenticatedRequest, res: Response): Promise<void> => {

@@ -3,6 +3,8 @@ import request from "supertest";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../../src/app";
 import { createTestDb } from "../helpers/testDb";
+import { as } from "../helpers/api";
+import { createDirectConversation, createGroup } from "../helpers/fixtures";
 import { signupTestUser } from "../helpers/testUser";
 
 describe("Users API", () => {
@@ -81,5 +83,44 @@ describe("Users API", () => {
     const searchRes = await request(app).get("/api/v1/users/search?q=a");
     expect(meRes.status).toBe(401);
     expect(searchRes.status).toBe(401);
+  });
+
+  describe("GET /users/:id — contact info", () => {
+    it("shows the bio to someone who shares a chat, but not to a stranger", async () => {
+      const alice = await signupTestUser(app, { displayName: "Alice", email: "alice@example.com" });
+      const bob = await signupTestUser(app, { displayName: "Bob", email: "bob@example.com" });
+      const stranger = await signupTestUser(app, { displayName: "Stranger", email: "stranger@example.com" });
+      await as(app, alice).patch("/api/v1/users/me").send({ bio: "Loves compilers", statusMessage: "Busy" });
+      await createDirectConversation(app, bob, alice);
+
+      const asBob = await as(app, bob).get(`/api/v1/users/${alice.userId}`);
+      expect(asBob.status).toBe(200);
+      expect(asBob.body).toEqual({ id: alice.userId, displayName: "Alice", avatarUrl: null, statusMessage: "Busy", bio: "Loves compilers" });
+
+      const asStranger = await as(app, stranger).get(`/api/v1/users/${alice.userId}`);
+      expect(asStranger.status).toBe(200);
+      expect(asStranger.body).not.toHaveProperty("bio");
+      expect(asStranger.body).not.toHaveProperty("email");
+
+      const self = await as(app, alice).get(`/api/v1/users/${alice.userId}`);
+      expect(self.body.bio).toBe("Loves compilers");
+    });
+
+    it("stops showing the bio once the only shared group has been left", async () => {
+      const alice = await signupTestUser(app, { displayName: "Alice", email: "alice@example.com" });
+      const carol = await signupTestUser(app, { displayName: "Carol", email: "carol@example.com" });
+      await as(app, alice).patch("/api/v1/users/me").send({ bio: "Private-ish" });
+      const { groupId } = await createGroup(app, alice, [carol]);
+
+      expect((await as(app, carol).get(`/api/v1/users/${alice.userId}`)).body.bio).toBe("Private-ish");
+      expect((await as(app, carol).post(`/api/v1/groups/${groupId}/leave`)).status).toBe(200);
+      expect((await as(app, carol).get(`/api/v1/users/${alice.userId}`)).body).not.toHaveProperty("bio");
+    });
+
+    it("returns 404 for an unknown user and 400 for a malformed id", async () => {
+      const alice = await signupTestUser(app);
+      expect((await as(app, alice).get("/api/v1/users/00000000-0000-4000-8000-000000000000")).status).toBe(404);
+      expect((await as(app, alice).get("/api/v1/users/not-a-uuid")).status).toBe(400);
+    });
   });
 });

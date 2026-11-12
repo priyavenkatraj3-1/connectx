@@ -1,5 +1,5 @@
 import type { DatabaseClient } from "../../db/pool";
-import type { OwnProfile, ProfileUpdateInput, PublicProfile } from "./users.types";
+import type { ContactProfile, OwnProfile, ProfileUpdateInput, PublicProfile } from "./users.types";
 
 interface ProfileRow {
   id: string;
@@ -52,6 +52,36 @@ export class UsersRepository {
     const result = await this.db.query<ProfileRow>(`${OWN_PROFILE_SELECT} AND u.id = $1`, [userId]);
     const row = result.rows[0];
     return row ? toPublicProfile(row) : null;
+  }
+
+  /** Public profile plus bio (callers decide whether the requester may see the bio). */
+  async findContactProfile(userId: string): Promise<(ContactProfile & { bio: string | null }) | null> {
+    const result = await this.db.query<ProfileRow>(`${OWN_PROFILE_SELECT} AND u.id = $1`, [userId]);
+    const row = result.rows[0];
+    return row ? { ...toPublicProfile(row), bio: row.bio } : null;
+  }
+
+  /** Everyone who shares an active conversation with the user (not the user themselves). */
+  async contactIds(userId: string): Promise<string[]> {
+    const result = await this.db.query<{ user_id: string }>(
+      `SELECT DISTINCT b.user_id FROM conversation_members a
+       JOIN conversation_members b ON b.conversation_id = a.conversation_id
+       WHERE a.user_id = $1 AND b.user_id != $1 AND a.left_at IS NULL AND b.left_at IS NULL`,
+      [userId]
+    );
+    return result.rows.map((row) => row.user_id);
+  }
+
+  /** True if both users are current (not departed) members of at least one conversation. */
+  async shareActiveConversation(userId: string, otherUserId: string): Promise<boolean> {
+    const result = await this.db.query(
+      `SELECT 1 FROM conversation_members a
+       JOIN conversation_members b ON b.conversation_id = a.conversation_id
+       WHERE a.user_id = $1 AND b.user_id = $2 AND a.left_at IS NULL AND b.left_at IS NULL
+       LIMIT 1`,
+      [userId, otherUserId]
+    );
+    return result.rows.length > 0;
   }
 
   async findManyPublicProfiles(userIds: string[]): Promise<Map<string, PublicProfile>> {

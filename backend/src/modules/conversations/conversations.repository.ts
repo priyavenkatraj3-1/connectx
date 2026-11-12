@@ -3,7 +3,7 @@ import { generateId } from "../../utils/id";
 import type { GroupRole } from "../groups/groups.types";
 import type { UsersRepository } from "../users/users.repository";
 import type { Conversation } from "./conversation.interface";
-import type { ActiveMembership, ConversationSummary, LastMessagePreview } from "./conversations.types";
+import type { ActiveMembership, ChatPreferences, ConversationSummary, LastMessagePreview } from "./conversations.types";
 
 interface ConversationRow {
   id: string;
@@ -23,6 +23,17 @@ interface MembershipRow {
   group_description: string | null;
   group_avatar_url: string | null;
   group_role: GroupRole | null;
+  pinned_at: Date | null;
+  archived_at: Date | null;
+  muted_until: Date | null;
+}
+
+function toChatPreferences(row: Pick<MembershipRow, "pinned_at" | "archived_at" | "muted_until">, now: number): ChatPreferences {
+  return {
+    pinned: row.pinned_at !== null,
+    archived: row.archived_at !== null,
+    mutedUntil: row.muted_until && new Date(row.muted_until).getTime() > now ? row.muted_until : null,
+  };
 }
 
 interface MessageRow {
@@ -251,9 +262,61 @@ export class ConversationsRepository {
     return this.getUnreadCount(conversationId, userId, row.last_read_message_id);
   }
 
+  /** The user's pin/archive/mute settings for a conversation they're an active member of, or null. */
+  async getChatPreferences(conversationId: string, userId: string): Promise<ChatPreferences | null> {
+    const result = await this.db.query<Pick<MembershipRow, "pinned_at" | "archived_at" | "muted_until">>(
+      `SELECT pinned_at, archived_at, muted_until FROM conversation_members
+       WHERE conversation_id = $1 AND user_id = $2 AND left_at IS NULL`,
+      [conversationId, userId]
+    );
+    const row = result.rows[0];
+    return row ? toChatPreferences(row, Date.now()) : null;
+  }
+
+  async countPinned(userId: string): Promise<number> {
+    const result = await this.db.query<{ count: string }>(
+      "SELECT COUNT(*)::text AS count FROM conversation_members WHERE user_id = $1 AND left_at IS NULL AND pinned_at IS NOT NULL",
+      [userId]
+    );
+    return Number(result.rows[0]?.count ?? 0);
+  }
+
+  /** Writes only the given fields (undefined = unchanged) on the user's active membership. */
+  async updateChatPreferences(
+    conversationId: string,
+    userId: string,
+    changes: { pinnedAt?: Date | null; archivedAt?: Date | null; mutedUntil?: Date | null }
+  ): Promise<void> {
+    const sets: string[] = [];
+    const params: unknown[] = [conversationId, userId];
+    const column = { pinnedAt: "pinned_at", archivedAt: "archived_at", mutedUntil: "muted_until" } as const;
+    for (const key of Object.keys(column) as Array<keyof typeof column>) {
+      if (changes[key] === undefined) continue;
+      params.push(changes[key]);
+      sets.push(`${column[key]} = $${params.length}`);
+    }
+    if (sets.length === 0) return;
+    await this.db.query(
+      `UPDATE conversation_members SET ${sets.join(", ")} WHERE conversation_id = $1 AND user_id = $2 AND left_at IS NULL`,
+      params
+    );
+  }
+
+  /** Of `userIds`, those who have muted this conversation right now. */
+  async mutedUserIds(conversationId: string, userIds: string[]): Promise<Set<string>> {
+    if (userIds.length === 0) return new Set();
+    const result = await this.db.query<{ user_id: string }>(
+      `SELECT user_id FROM conversation_members
+       WHERE conversation_id = $1 AND muted_until IS NOT NULL AND muted_until > now() AND user_id IN (${placeholders(userIds, 1)})`,
+      [conversationId, ...userIds]
+    );
+    return new Set(result.rows.map((row) => row.user_id));
+  }
+
   async listForUser(userId: string): Promise<ConversationSummary[]> {
     const memberships = await this.db.query<MembershipRow>(
       `SELECT c.id AS conversation_id, c.type, c.updated_at, cm.last_read_message_id,
+              cm.pinned_at, cm.archived_at, cm.muted_until,
               g.id AS group_id, g.name AS group_name, g.description AS group_description,
               g.avatar_url AS group_avatar_url, gm.role AS group_role
        FROM conversation_members cm
@@ -312,8 +375,10 @@ export class ConversationsRepository {
     }
 
     const summaries: ConversationSummary[] = [];
+    const now = Date.now();
     for (const row of memberships.rows) {
       const { lastMessage, unreadCount } = previews.get(row.conversation_id)!;
+      const preferences = toChatPreferences(row, now);
 
       if (row.type === "direct") {
         const otherUserId = otherUserByConversation.get(row.conversation_id);
@@ -328,6 +393,7 @@ export class ConversationsRepository {
           lastMessage,
           unreadCount,
           updatedAt: row.updated_at,
+          ...preferences,
         });
       } else {
         if (!row.group_id || !row.group_name || !row.group_role) continue; // inconsistent group row — skip rather than crash
@@ -347,6 +413,7 @@ export class ConversationsRepository {
           lastMessage,
           unreadCount,
           updatedAt: row.updated_at,
+          ...preferences,
         });
       }
     }

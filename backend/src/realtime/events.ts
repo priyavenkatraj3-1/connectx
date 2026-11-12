@@ -3,7 +3,8 @@ import type { CallDTO } from "../modules/calls/calls.types";
 import type { SharedNoteDTO } from "../modules/collaboration/notes.service";
 import type { TodoItemDTO, TodoListDTO } from "../modules/collaboration/todos.service";
 import type { GroupDTO, GroupRole } from "../modules/groups/groups.types";
-import type { MessageDTO, MessageStatus } from "../modules/messages/messages.types";
+import type { MessageDTO, MessageReactionSummary, MessageStatus } from "../modules/messages/messages.types";
+import type { PublicProfile } from "../modules/users/users.types";
 import type { NotificationDTO } from "../modules/notifications/notifications.service";
 import type { PinnedMessageDTO, SavedMessageDTO } from "../modules/organization/organization.service";
 import type { UserPreferencesDTO } from "../modules/preferences/preferences.service";
@@ -125,6 +126,14 @@ export type ServerEvent =
   | { type: "sessions:updated" }
   /** A session was signed out. If it's yours, the server closes this connection right after. */
   | { type: "session:revoked"; sessionId: string }
+  /** Someone you share a chat with (or you, on another device) changed their name, status or picture. */
+  | { type: "user:updated"; user: PublicProfile }
+  /** You changed a chat's pin/archive/mute settings (on any of your devices). */
+  | { type: "conversation:preferences"; conversationId: string; pinned: boolean; archived: boolean; mutedUntil: Date | null }
+  /** A message's reactions changed (someone reacted, changed or removed theirs). */
+  | { type: "message:reactions"; conversationId: string; messageId: string; reactions: MessageReactionSummary[] }
+  /** Another member started/stopped typing in a conversation (never sent to the typist). Clients expire it after a few seconds. */
+  | { type: "typing"; conversationId: string; userId: string; isTyping: boolean }
   | { type: "error"; message: string };
 
 export interface IceCandidatePayload {
@@ -138,6 +147,7 @@ export interface IceCandidatePayload {
 export type ClientEvent =
   | { type: "ping" }
   | { type: "message:read"; conversationId: string; upToMessageId: string }
+  | { type: "typing"; conversationId: string; isTyping: boolean }
   | CallClientEvent;
 
 export type CallClientEvent =

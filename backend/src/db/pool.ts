@@ -1,5 +1,6 @@
 import { Pool } from "pg";
 import { env } from "../config/env";
+import { logger } from "../utils/logger";
 
 /**
  * Thin abstraction over a SQL connection so repositories depend on this
@@ -75,7 +76,12 @@ export function createClientFromPgPool(pool: PgPoolLike): DatabaseClient {
  * database — see docs/database.md and the root README for setup steps.
  */
 export function createPostgresClient(connectionString: string = env.databaseUrl): DatabaseClient {
-  return createClientFromPgPool(new Pool({ connectionString }));
+  const pool = new Pool({ connectionString });
+  // An idle client dropped by the server (e.g. Neon restarting or suspending)
+  // is emitted on the pool; without a listener it would crash the process.
+  // The pool discards that client and opens a new one on the next query.
+  pool.on("error", (err) => logger.error("[database] idle client error", err));
+  return createClientFromPgPool(pool);
 }
 
 let sharedClient: DatabaseClient | null = null;

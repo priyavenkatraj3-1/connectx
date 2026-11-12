@@ -94,6 +94,11 @@ export class AIGateway {
     return { name: this.transcriptionProvider.name, configured: this.transcriptionProvider.isConfigured };
   }
 
+  /** The transcription provider's own audio size limit, if it has one. */
+  get transcriptionMaxAudioBytes(): number | undefined {
+    return this.transcriptionProvider.maxAudioBytes;
+  }
+
   requireTextProvider(): void {
     if (!this.provider.isConfigured) throw new AIUnavailableError();
   }

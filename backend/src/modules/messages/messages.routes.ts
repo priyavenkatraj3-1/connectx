@@ -11,6 +11,8 @@ import {
   listMessagesQuerySchema,
   markReadSchema,
   messageParamsSchema,
+  reactionSchema,
+  searchMessagesQuerySchema,
   sendMessageSchema,
 } from "./messages.validation";
 
@@ -20,7 +22,8 @@ const passThrough: RequestHandler = (_req, _res, next) => next();
 export function createMessagesRouter(
   messagesService: MessagesService,
   membershipChecker: MembershipChecker,
-  sendLimiter: RequestHandler = passThrough
+  sendLimiter: RequestHandler = passThrough,
+  searchLimiter: RequestHandler = passThrough
 ): Router {
   const controller = new MessagesController(messagesService);
   const router = Router();
@@ -34,6 +37,15 @@ export function createMessagesRouter(
     guardMembership,
     validateQuery(listMessagesQuerySchema),
     asyncHandler(controller.list)
+  );
+  router.get(
+    "/:conversationId/search",
+    requireAuth,
+    searchLimiter,
+    conversationParams,
+    guardMembership,
+    validateQuery(searchMessagesQuerySchema),
+    asyncHandler(controller.search)
   );
   router.post(
     "/:conversationId",
@@ -51,6 +63,23 @@ export function createMessagesRouter(
     guardMembership,
     validateBody(markReadSchema),
     asyncHandler(controller.markRead)
+  );
+  // Reactions: one per person; PUT sets/replaces it, DELETE removes it. Rate-limited like sending.
+  router.put(
+    "/:conversationId/:messageId/reaction",
+    requireAuth,
+    sendLimiter,
+    validateParams(messageParamsSchema),
+    guardMembership,
+    validateBody(reactionSchema),
+    asyncHandler(controller.react)
+  );
+  router.delete(
+    "/:conversationId/:messageId/reaction",
+    requireAuth,
+    validateParams(messageParamsSchema),
+    guardMembership,
+    asyncHandler(controller.unreact)
   );
   router.patch(
     "/:conversationId/:messageId",

@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from "fs";
 import { join } from "path";
 import { Pool } from "pg";
-import { newDb } from "pg-mem";
+import { DataType, newDb } from "pg-mem";
 import { createClientFromPgPool, type DatabaseClient, type PgPoolLike } from "../../src/db/pool";
 
 const migrationsDir = join(__dirname, "..", "..", "..", "database", "migrations");
@@ -32,6 +32,14 @@ export async function createTestDb(): Promise<DatabaseClient> {
 
 async function createPgMemTestDb(): Promise<DatabaseClient> {
   const mem = newDb({ autoCreateForeignKeyIndices: true });
+  // pg-mem lacks Postgres's built-in strpos(text, text) (1-based position, 0 if absent); real Postgres has it.
+  mem.public.registerFunction({
+    name: "strpos",
+    args: [DataType.text, DataType.text],
+    returns: DataType.integer,
+    implementation: (haystack: string | null, needle: string | null) =>
+      haystack === null || needle === null ? null : haystack.indexOf(needle) + 1,
+  });
   const { Pool: MemPool } = mem.adapters.createPg();
   const client = createClientFromPgPool(new MemPool() as unknown as PgPoolLike);
 

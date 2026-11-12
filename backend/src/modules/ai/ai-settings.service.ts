@@ -4,7 +4,7 @@ import type { AIGateway } from "./ai.gateway";
 import type { AIRepository } from "./ai.repository";
 import type { AISettings } from "./ai.types";
 import { AIDisabledError } from "./ai.errors";
-import { SUPPORTED_LANGUAGES } from "./languages";
+import { SUPPORTED_LANGUAGES, VOICE_TRANSLATION_LANGUAGES } from "./languages";
 
 export type AISettingsUpdate = Partial<Omit<AISettings, "consentedAt">>;
 
@@ -21,7 +21,9 @@ export type AIRequirement =
   /** Sends one message to the text provider for a scam check. */
   | "spam_shield_ai"
   /** Sends audio to the transcription provider. */
-  | "voice";
+  | "voice"
+  /** Sends the user's own voice transcript to the text provider for translation. */
+  | "voice_translation";
 
 /** Plain-language disclosure of what leaves the server, shown in Settings. Kept next to the gating code on purpose. */
 export const DATA_SHARING_DISCLOSURE = [
@@ -29,6 +31,7 @@ export const DATA_SHARING_DISCLOSURE = [
   "Translation sends only the one message you ask to translate.",
   "The AI scam check sends only the one message you ask to check. Automatic scam warnings run on the ConnectX server and send nothing to an AI provider.",
   "Voice Intelligence sends the audio of the voice message you choose to the transcription provider, and the transcript to the AI provider for a summary.",
+  "Voice translation sends only your transcript of the voice message you choose (never the audio) to the AI provider, and stores the translation for you alone.",
   "When AI Memory is on, your saved memory items are included with Ask Your Chats questions.",
   "ConnectX logs AI usage metadata (feature, time, token counts, success/failure) — never your questions, messages or AI answers.",
 ];
@@ -49,6 +52,7 @@ export class AISettingsService {
       provider: this.gateway.providerStatus,
       transcription: this.gateway.transcriptionStatus,
       supportedLanguages: SUPPORTED_LANGUAGES,
+      voiceTranslationLanguages: VOICE_TRANSLATION_LANGUAGES.map(({ code, name }) => ({ code, name })),
       dataSharing: DATA_SHARING_DISCLOSURE,
     };
   }
@@ -89,6 +93,9 @@ export class AISettingsService {
       if (!settings.voiceEnabled) throw new AIDisabledError("Turn on Voice Intelligence in Settings → AI Features.");
       this.gateway.requireTranscriptionProvider();
       return settings;
+    }
+    if (requirement === "voice_translation" && !settings.voiceEnabled) {
+      throw new AIDisabledError("Turn on Voice Intelligence in Settings → AI Features.");
     }
     this.gateway.requireTextProvider();
     return settings;

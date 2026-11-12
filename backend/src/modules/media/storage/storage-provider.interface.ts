@@ -18,9 +18,10 @@ export interface StorageProvider {
  * Storage keys are server-generated, never user-controlled:
  *   message attachments: "<conversationId>/<attachmentId>"
  *   status media:        "statuses/<ownerId>/<attachmentId>"
+ *   profile pictures:    "avatars/<userId>/<avatarId>"
  */
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
-const STORAGE_KEY_PATTERN = new RegExp(`^(statuses/)?${UUID}/${UUID}$`);
+const STORAGE_KEY_PATTERN = new RegExp(`^(statuses/|avatars/)?${UUID}/${UUID}$`);
 
 export function buildStorageKey(conversationId: string, attachmentId: string): string {
   const key = `${conversationId}/${attachmentId}`.toLowerCase();
@@ -30,6 +31,12 @@ export function buildStorageKey(conversationId: string, attachmentId: string): s
 
 export function buildStatusStorageKey(ownerId: string, attachmentId: string): string {
   const key = `statuses/${ownerId}/${attachmentId}`.toLowerCase();
+  assertValidStorageKey(key);
+  return key;
+}
+
+export function buildAvatarStorageKey(userId: string, avatarId: string): string {
+  const key = `avatars/${userId}/${avatarId}`.toLowerCase();
   assertValidStorageKey(key);
   return key;
 }

@@ -58,6 +58,17 @@ export class ScriptedAIProvider implements AIProvider {
     return this;
   }
 
+  /** The next call waits until `release(output)` is called (to test concurrent requests). */
+  hold(): { release(output: unknown): void } {
+    let release!: (output: unknown) => void;
+    const answer = new Promise<unknown>((resolve) => (release = resolve));
+    this.steps.push(async () => {
+      const value = await answer;
+      return { text: typeof value === "string" ? value : JSON.stringify(value), model: this.model, inputTokens: 100, outputTokens: 20, truncated: false };
+    });
+    return { release };
+  }
+
   get pending(): number {
     return this.steps.length;
   }
@@ -86,8 +97,35 @@ export class ScriptedTranscriptionProvider implements TranscriptionProvider {
     return this;
   }
 
+  /** Queued answers that wait for the test ("hang" = never answer until the gateway's timeout aborts). */
+  private readonly held: Array<Promise<TranscriptionResult | ProviderCallError> | "hang"> = [];
+
+  /** The next call waits until `release` is called (to test concurrent requests). */
+  hold(): { release(next: TranscriptionResult | ProviderCallError): void } {
+    let release!: (next: TranscriptionResult | ProviderCallError) => void;
+    this.held.push(new Promise((resolve) => (release = resolve)));
+    return { release };
+  }
+
+  /** The next call never answers, until the gateway's timeout aborts it. */
+  hang(): this {
+    this.held.push("hang");
+    return this;
+  }
+
   async transcribe(request: TranscriptionRequest): Promise<TranscriptionResult> {
     this.calls.push(request);
+    const held = this.held.shift();
+    if (held === "hang") {
+      return new Promise((_resolve, reject) =>
+        request.signal.addEventListener("abort", () => reject(new ProviderCallError("aborted", "aborted", false)))
+      );
+    }
+    if (held) {
+      const next = await held;
+      if (next instanceof ProviderCallError) throw next;
+      return next;
+    }
     const next = this.results.shift();
     if (!next) throw new Error("ScriptedTranscriptionProvider: unexpected call");
     if (next instanceof ProviderCallError) throw next;

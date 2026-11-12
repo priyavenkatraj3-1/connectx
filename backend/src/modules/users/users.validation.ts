@@ -21,6 +21,11 @@ export const userParamsSchema = z.object({
   userId: z.string().uuid("userId must be a valid ID"),
 });
 
+export const avatarParamsSchema = z.object({
+  userId: z.string().uuid("userId must be a valid ID"),
+  avatarId: z.string().uuid("avatarId must be a valid ID"),
+});
+
 export const searchUsersQuerySchema = z.object({
   q: z.string().trim().min(1, "Search query is required").max(80),
 });

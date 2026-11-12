@@ -9,6 +9,10 @@ export const SAMPLE_FILES = {
   pdf: Buffer.from("%PDF-1.7\n1 0 obj\n<<>>\nendobj\n"),
   mp4: Buffer.concat([Buffer.from([0x00, 0x00, 0x00, 0x18]), Buffer.from("ftypmp42"), Buffer.alloc(16, 0)]),
   ogg: Buffer.concat([Buffer.from("OggS"), Buffer.alloc(32, 0)]),
+  /** WebM/Matroska EBML header — what Chrome/Edge MediaRecorder produces for audio/webm;codecs=opus. */
+  webmAudio: Buffer.concat([Buffer.from([0x1a, 0x45, 0xdf, 0xa3]), Buffer.from([0x9f, 0x42, 0x86, 0x81, 0x01]), Buffer.from("webm"), Buffer.alloc(24, 0)]),
+  /** Fragmented-MP4 "ftyp" box like Safari's MediaRecorder output (audio/mp4). */
+  m4aRecording: Buffer.concat([Buffer.from([0x00, 0x00, 0x00, 0x1c]), Buffer.from("ftypiso5"), Buffer.alloc(20, 0)]),
   txt: Buffer.from("hello, plain text\n"),
   /** A Windows executable header — must never be accepted, whatever it's named. */
   exe: Buffer.concat([Buffer.from("MZ"), Buffer.alloc(64, 0x90)]),

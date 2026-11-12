@@ -22,6 +22,37 @@ describe("validateUploadedFile", () => {
     expect(result).toMatchObject({ ok: true, mimeType, kind, sizeBytes: data.length });
   });
 
+  describe("in-chat voice recordings (MediaRecorder output, with the declared type browsers actually send)", () => {
+    it.each([
+      ["Chrome/Edge", "voice-message-20261112T102030Z.weba", SAMPLE_FILES.webmAudio, "audio/webm;codecs=opus", "audio/webm"],
+      ["Firefox", "voice-message-20261112T102030Z.ogg", SAMPLE_FILES.ogg, "audio/ogg;codecs=opus", "audio/ogg"],
+      ["Firefox (spaced parameter)", "voice-message-20261112T102030Z.ogg", SAMPLE_FILES.ogg, "audio/ogg; codecs=opus", "audio/ogg"],
+      ["Safari", "voice-message-20261112T102030Z.m4a", SAMPLE_FILES.m4aRecording, "audio/mp4", "audio/mp4"],
+      ["Safari (codec parameter)", "voice-message-20261112T102030Z.m4a", SAMPLE_FILES.m4aRecording, "audio/mp4;codecs=mp4a.40.2", "audio/mp4"],
+    ])("%s: stores %s as audio (%s), without the codec parameters", (_browser, name, data, declaredMimeType, stored) => {
+      expect(validateUploadedFile({ originalName: name, declaredMimeType, data }, ONE_MB)).toMatchObject({
+        ok: true,
+        mimeType: stored,
+        kind: "audio",
+      });
+    });
+
+    it("keeps classifying .webm as video, which is why the recorder never names WebM audio .webm", () => {
+      expect(
+        validateUploadedFile({ originalName: "voice.webm", declaredMimeType: "audio/webm;codecs=opus", data: SAMPLE_FILES.webmAudio }, ONE_MB)
+      ).toMatchObject({ ok: true, mimeType: "video/webm", kind: "video" });
+    });
+
+    it("rejects a recording whose bytes don't match its extension", () => {
+      expect(
+        validateUploadedFile({ originalName: "voice.weba", declaredMimeType: "audio/webm", data: SAMPLE_FILES.ogg }, ONE_MB)
+      ).toMatchObject({ ok: false, statusCode: 415 });
+      expect(
+        validateUploadedFile({ originalName: "voice.m4a", declaredMimeType: "audio/mp4", data: SAMPLE_FILES.webmAudio }, ONE_MB)
+      ).toMatchObject({ ok: false, statusCode: 415 });
+    });
+  });
+
   it("rejects empty files", () => {
     expect(validateUploadedFile({ originalName: "a.png", data: Buffer.alloc(0) }, ONE_MB)).toMatchObject({ ok: false, statusCode: 400 });
   });

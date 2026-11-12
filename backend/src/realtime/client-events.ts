@@ -43,6 +43,7 @@ const callEventSchemas = {
 type CallEventType = keyof typeof callEventSchemas;
 
 const messageReadSchema = z.object({ conversationId: id, upToMessageId: id });
+const typingSchema = z.object({ conversationId: id, isTyping: z.boolean() });
 
 export type ParsedClientEvent =
   | { ok: true; event: ClientEvent }
@@ -71,6 +72,12 @@ export function parseClientEvent(raw: string): ParsedClientEvent {
 
   if (type === "message:read") {
     const result = messageReadSchema.safeParse(payload);
+    if (!result.success) return { ok: false, kind: "ignored" };
+    return { ok: true, event: { type, ...result.data } };
+  }
+
+  if (type === "typing") {
+    const result = typingSchema.safeParse(payload);
     if (!result.success) return { ok: false, kind: "ignored" };
     return { ok: true, event: { type, ...result.data } };
   }

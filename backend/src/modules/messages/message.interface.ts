@@ -6,7 +6,7 @@ export type MessageContentType = "text" | "image" | "video" | "audio" | "file";
  * Contract for sending and retrieving messages, implemented by
  * MessagesService for direct (Phase 2) and group (Phase 3) conversations,
  * including replies, @mentions, attachments, and author-only edit/delete.
- * Reactions remain a later phase.
+ * Emoji reactions (one per person) are set with MessagesService.setReaction.
  */
 export interface MessageService {
   sendMessage(input: SendMessageParams): Promise<MessageDTO>;

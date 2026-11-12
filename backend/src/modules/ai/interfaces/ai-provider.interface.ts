@@ -61,6 +61,8 @@ export interface TranscriptionResult {
 export interface TranscriptionProvider {
   readonly name: string;
   readonly isConfigured: boolean;
+  /** Largest audio this provider accepts, when it is stricter than TRANSCRIPTION_MAX_AUDIO_MB. */
+  readonly maxAudioBytes?: number;
   transcribe(request: TranscriptionRequest): Promise<TranscriptionResult>;
 }
 

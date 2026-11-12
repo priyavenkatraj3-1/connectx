@@ -11,6 +11,7 @@ export function buildGatewayOptions(container: Container): WebSocketGatewayOptio
   return {
     onClientRead: (userId, conversationId, upToMessageId) =>
       container.messagesService.markRead(conversationId, userId, upToMessageId),
+    onClientTyping: (userId, conversationId, isTyping) => container.messagesService.setTyping(conversationId, userId, isTyping),
     onCallEvent: (ctx, event) => container.callsService.handleClientEvent(ctx, event),
     onConnect: (ctx) => container.callsService.handleConnect(ctx),
     onDisconnect: (ctx) => container.callsService.handleDisconnect(ctx),

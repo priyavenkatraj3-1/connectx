@@ -46,32 +46,43 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Calls still marked live from a previous run can't be signaled any more (that state lived in memory).
-  const staleCalls = await container.callsService.recoverStaleCalls();
-  if (staleCalls > 0) logger.info(`Marked ${staleCalls} call(s) interrupted by the last shutdown as failed.`);
+  if (env.backgroundJobsEnabled) {
+    // Calls still marked live from a previous run can't be signaled any more (that state lived in memory).
+    const staleCalls = await container.callsService.recoverStaleCalls();
+    if (staleCalls > 0) logger.info(`Marked ${staleCalls} call(s) interrupted by the last shutdown as failed.`);
+  } else {
+    logger.warn(
+      "BACKGROUND_JOBS_ENABLED=false: skipping startup recovery, the status sweep and the scheduler. Intended only for isolated local manual testing."
+    );
+  }
 
   const httpServer = createServer(app);
 
   const realtimeGateway = attachWebSocketGateway(httpServer, buildGatewayOptions(container));
   container.realtimeGatewayRef.current = realtimeGateway;
 
-  // Expired statuses are already hidden by every query; this sweep notifies
-  // open clients and deletes the expired rows and their media.
-  const sweepStatuses = () =>
-    void container.statusesService.sweepExpired().catch((err) => logger.error("[status sweep failed]", err));
-  sweepStatuses();
-  const sweepTimer = setInterval(sweepStatuses, STATUS_SWEEP_INTERVAL_MS);
-  sweepTimer.unref();
+  // Left unset when background jobs are off; clearInterval(undefined) on shutdown is a no-op.
+  let sweepTimer: ReturnType<typeof setInterval> | undefined;
+  let schedulerTimer: ReturnType<typeof setInterval> | undefined;
+  if (env.backgroundJobsEnabled) {
+    // Expired statuses are already hidden by every query; this sweep notifies
+    // open clients and deletes the expired rows and their media.
+    const sweepStatuses = () =>
+      void container.statusesService.sweepExpired().catch((err) => logger.error("[status sweep failed]", err));
+    sweepStatuses();
+    sweepTimer = setInterval(sweepStatuses, STATUS_SWEEP_INTERVAL_MS);
+    sweepTimer.unref();
 
-  // Phase 6 scheduler: reminders, task-due notifications, scheduled messages.
-  // Scheduled messages left mid-send by a crash are safe to retry (sends are idempotent).
-  const stuck = await container.scheduledMessagesService.recoverStuck();
-  if (stuck > 0) logger.info(`Re-queued ${stuck} scheduled message(s) interrupted by the last shutdown.`);
-  const runScheduler = () =>
-    void container.schedulerService.tick().catch((err) => logger.error("[scheduler tick failed]", err));
-  runScheduler();
-  const schedulerTimer = setInterval(runScheduler, env.schedulerIntervalMs);
-  schedulerTimer.unref();
+    // Phase 6 scheduler: reminders, task-due notifications, scheduled messages.
+    // Scheduled messages left mid-send by a crash are safe to retry (sends are idempotent).
+    const stuck = await container.scheduledMessagesService.recoverStuck();
+    if (stuck > 0) logger.info(`Re-queued ${stuck} scheduled message(s) interrupted by the last shutdown.`);
+    const runScheduler = () =>
+      void container.schedulerService.tick().catch((err) => logger.error("[scheduler tick failed]", err));
+    runScheduler();
+    schedulerTimer = setInterval(runScheduler, env.schedulerIntervalMs);
+    schedulerTimer.unref();
+  }
 
   httpServer.listen(env.port, () => {
     logger.info(`ConnectX backend listening on port ${env.port} [${env.nodeEnv}]`);

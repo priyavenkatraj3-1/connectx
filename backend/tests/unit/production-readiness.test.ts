@@ -1,7 +1,7 @@
 import express, { type Request } from "express";
 import request from "supertest";
 import { describe, expect, it } from "vitest";
-import { env, productionConfigProblems, type EnvConfig } from "../../src/config/env";
+import { env, productionConfigProblems, readBoolean, type EnvConfig } from "../../src/config/env";
 import { errorHandler } from "../../src/middleware/errorHandler";
 import { createUserRateLimiter } from "../../src/middleware/rateLimiter";
 import { redactUrl } from "../../src/utils/logger";
@@ -57,6 +57,9 @@ describe("productionConfigProblems", () => {
     clientOrigins: ["https://chat.example.com"],
     bcryptSaltRounds: 12,
     jwt: { ...env.jwt, accessSecret: "a".repeat(48), refreshSecret: "b".repeat(48) },
+    trustProxy: 1,
+    mediaStorage: "cloudinary",
+    allowLocalMediaStorage: false,
   };
 
   it("accepts a safe configuration", () => {
@@ -77,6 +80,62 @@ describe("productionConfigProblems", () => {
     expect(productionConfigProblems({ ...good, clientOrigins: ["*"] })).toContain("CLIENT_ORIGIN must not be *");
     expect(productionConfigProblems({ ...good, clientOrigins: [] })).toContain("CLIENT_ORIGIN must list the frontend's origin");
     expect(productionConfigProblems({ ...good, bcryptSaltRounds: 8 })).toContain("BCRYPT_SALT_ROUNDS must be at least 10");
+  });
+
+  it("refuses local media storage unless ALLOW_LOCAL_MEDIA_STORAGE confirms a persistent disk", () => {
+    const local = productionConfigProblems({ ...good, mediaStorage: "local", allowLocalMediaStorage: false }).join("\n");
+    expect(local).toMatch(/MEDIA_STORAGE=local keeps uploads on this server's disk/);
+    expect(local).toMatch(/ALLOW_LOCAL_MEDIA_STORAGE=true/);
+    expect(productionConfigProblems({ ...good, mediaStorage: "local", allowLocalMediaStorage: true })).toEqual([]);
+    expect(productionConfigProblems({ ...good, mediaStorage: "cloudinary", allowLocalMediaStorage: false })).toEqual([]);
+  });
+
+  it("requires TRUST_PROXY to name the proxy hops, refusing unset/false/0 and the spoofable true", () => {
+    for (const trustProxy of [false, 0]) {
+      expect(productionConfigProblems({ ...good, trustProxy }).join("\n")).toMatch(/TRUST_PROXY must be set to the number of reverse-proxy hops/);
+    }
+    expect(productionConfigProblems({ ...good, trustProxy: true }).join("\n")).toMatch(/TRUST_PROXY=true trusts any client-supplied X-Forwarded-For/);
+    for (const trustProxy of [1, 2, "loopback", "10.0.0.0/8"]) {
+      expect(productionConfigProblems({ ...good, trustProxy })).toEqual([]);
+    }
+  });
+
+  it("reports every problem at once", () => {
+    const problems = productionConfigProblems({ ...good, clientOrigins: [], mediaStorage: "local", trustProxy: false });
+    expect(problems).toHaveLength(3);
+  });
+});
+
+describe("readBoolean", () => {
+  const NAME = "CONNECTX_TEST_BOOLEAN_FLAG";
+
+  function read(value: string | undefined, fallback: boolean) {
+    if (value === undefined) delete process.env[NAME];
+    else process.env[NAME] = value;
+    try {
+      return readBoolean(NAME, fallback);
+    } finally {
+      delete process.env[NAME];
+    }
+  }
+
+  it("uses the fallback when the variable is unset or empty", () => {
+    expect(read(undefined, true)).toBe(true);
+    expect(read(undefined, false)).toBe(false);
+    expect(read("", true)).toBe(true);
+    expect(read("   ", false)).toBe(false);
+  });
+
+  it("accepts explicit true and false, ignoring case and surrounding spaces", () => {
+    expect(read("true", false)).toBe(true);
+    expect(read("false", true)).toBe(false);
+    expect(read(" FALSE ", true)).toBe(false);
+  });
+
+  it("rejects anything else instead of silently keeping the fallback", () => {
+    for (const value of ["flase", "0", "1", "no", "off", "yes"]) {
+      expect(() => read(value, true)).toThrow(`${NAME} must be "true" or "false"`);
+    }
   });
 });
 

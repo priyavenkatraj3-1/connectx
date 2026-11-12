@@ -75,6 +75,42 @@ interface VoiceRow {
   updated_at: Date;
 }
 
+interface VoiceTranslationRow {
+  attachment_id: string;
+  target_language: string;
+  source_hash: string;
+  translated_text: string;
+  detected_source_language: string | null;
+  provider: string | null;
+  model: string | null;
+  updated_at: Date;
+}
+
+/** A stored voice translation, including the hash of the transcript it was made from (never sent to clients). */
+export interface VoiceTranslationRecord {
+  attachmentId: string;
+  targetLanguage: string;
+  sourceHash: string;
+  translatedText: string;
+  detectedSourceLanguage: string | null;
+  provider: string | null;
+  model: string | null;
+  updatedAt: Date;
+}
+
+function toVoiceTranslation(row: VoiceTranslationRow): VoiceTranslationRecord {
+  return {
+    attachmentId: row.attachment_id,
+    targetLanguage: row.target_language,
+    sourceHash: row.source_hash.trim(),
+    translatedText: row.translated_text,
+    detectedSourceLanguage: row.detected_source_language,
+    provider: row.provider,
+    model: row.model,
+    updatedAt: row.updated_at,
+  };
+}
+
 /** A message row as the AI retrieval layer sees it — only fields needed to build context. */
 export interface RetrievedMessageRow {
   id: string;
@@ -593,6 +629,70 @@ export class AIRepository {
       );
     }
     return (await this.findVoiceResult(userId, attachmentId))!;
+  }
+
+  // --- Voice translations ---------------------------------------------------
+
+  /** Internal id of the requester's own voice result (translations hang off it). */
+  async findVoiceResultId(userId: string, attachmentId: string): Promise<string | null> {
+    const result = await this.db.query<{ id: string }>(
+      "SELECT id FROM ai_voice_results WHERE user_id = $1 AND attachment_id = $2",
+      [userId, attachmentId]
+    );
+    return result.rows[0]?.id ?? null;
+  }
+
+  async findVoiceTranslation(userId: string, attachmentId: string, targetLanguage: string): Promise<VoiceTranslationRecord | null> {
+    const result = await this.db.query<VoiceTranslationRow>(
+      `SELECT attachment_id, target_language, source_hash, translated_text, detected_source_language, provider, model, updated_at
+       FROM ai_voice_translations WHERE user_id = $1 AND attachment_id = $2 AND target_language = $3`,
+      [userId, attachmentId, targetLanguage]
+    );
+    const row = result.rows[0];
+    return row ? toVoiceTranslation(row) : null;
+  }
+
+  /** The requester's stored translations of this voice message, oldest language first. */
+  async listVoiceTranslations(userId: string, attachmentId: string): Promise<VoiceTranslationRecord[]> {
+    const result = await this.db.query<VoiceTranslationRow>(
+      `SELECT attachment_id, target_language, source_hash, translated_text, detected_source_language, provider, model, updated_at
+       FROM ai_voice_translations WHERE user_id = $1 AND attachment_id = $2 ORDER BY created_at, target_language`,
+      [userId, attachmentId]
+    );
+    return result.rows.map(toVoiceTranslation);
+  }
+
+  async saveVoiceTranslation(input: {
+    voiceResultId: string;
+    userId: string;
+    attachmentId: string;
+    targetLanguage: string;
+    sourceHash: string;
+    translatedText: string;
+    detectedSourceLanguage: string | null;
+    provider: string | null;
+    model: string | null;
+  }): Promise<VoiceTranslationRecord> {
+    await this.db.query(
+      `INSERT INTO ai_voice_translations
+         (voice_result_id, user_id, attachment_id, target_language, source_hash, translated_text, detected_source_language, provider, model)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       ON CONFLICT (user_id, attachment_id, target_language) DO UPDATE
+       SET voice_result_id = $1, source_hash = $5, translated_text = $6, detected_source_language = $7,
+           provider = $8, model = $9, updated_at = now()`,
+      [
+        input.voiceResultId,
+        input.userId,
+        input.attachmentId,
+        input.targetLanguage,
+        input.sourceHash,
+        input.translatedText,
+        input.detectedSourceLanguage,
+        input.provider,
+        input.model,
+      ]
+    );
+    return (await this.findVoiceTranslation(input.userId, input.attachmentId, input.targetLanguage))!;
   }
 
   // --- Usage ----------------------------------------------------------------

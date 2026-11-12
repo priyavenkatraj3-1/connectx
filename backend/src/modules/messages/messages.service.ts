@@ -8,8 +8,15 @@ import type { ActiveMembership } from "../conversations/conversations.types";
 import type { MediaRepository } from "../media/media.repository";
 import type { StorageProvider } from "../media/storage/storage-provider.interface";
 import { aggregateStatus, AttachmentUnavailableError, type MessagesRepository } from "./messages.repository";
-import type { MessageDTO, MessagePage, MessageStatus, SendMessageParams } from "./messages.types";
+import type { MessageDTO, MessagePage, MessageReactionSummary, MessageStatus, SendMessageParams } from "./messages.types";
 import { logger } from "../../utils/logger";
+
+/** A repeated "started typing" from the same user and chat within this window isn't relayed again. Clients resend every ~3s while typing. */
+export const TYPING_REFRESH_MS = 2000;
+/** Most results one in-chat search returns. */
+export const SEARCH_RESULT_LIMIT = 30;
+/** Bound on the typing throttle's memory; stale entries are pruned past this size. */
+const MAX_TRACKED_TYPISTS = 10_000;
 
 /** Attachment kind → messages.content_type (the Phase 1 CHECK constraint has no 'document'). */
 const CONTENT_TYPE_BY_KIND = {
@@ -37,8 +44,12 @@ export class MessagesService implements MessageService {
     private readonly realtimeGateway: RealtimeGateway,
     private readonly mediaRepository: MediaRepository,
     private readonly storage: StorageProvider,
-    private readonly mentionNotifier?: MentionNotifier
+    private readonly mentionNotifier?: MentionNotifier,
+    private readonly now: () => number = Date.now
   ) {}
+
+  /** When each (user, conversation) last had a "started typing" relayed. In memory, like the WebSocket registry. */
+  private readonly typingSentAt = new Map<string, number>();
 
   /**
    * Idempotent-send lookup: if this sender already stored a message with
@@ -131,6 +142,7 @@ export class MessagesService implements MessageService {
         mentionedUserIds,
         attachmentId: input.attachmentId ?? null,
         clientMessageId: input.clientMessageId ?? null,
+        statusReply: input.statusReply ?? null,
       });
     } catch (err) {
       if (err instanceof AttachmentUnavailableError) throw new AppError("Attachment has already been sent", 409);
@@ -253,6 +265,76 @@ export class MessagesService implements MessageService {
       conversationId: input.conversationId,
       messageId: input.messageId,
     });
+  }
+
+  /** Messages in this conversation whose text contains `query` (case-insensitive), newest first. Members only. */
+  async searchMessages(conversationId: string, userId: string, query: string, limit = SEARCH_RESULT_LIMIT): Promise<MessageDTO[]> {
+    await this.requireMembership(conversationId, userId);
+    const members = await this.conversationsRepository.getActiveMembers(conversationId);
+    return this.messagesRepository.searchInConversation(conversationId, userId, query, members, limit);
+  }
+
+  /**
+   * Sets (emoji) or clears (null) the user's reaction on a message. Only
+   * active members who can see the message may react (404 otherwise, so a
+   * message's existence isn't confirmed to outsiders); deleted messages
+   * can't be reacted to. Every active member gets the new summary live.
+   */
+  async setReaction(input: { conversationId: string; messageId: string; userId: string; emoji: string | null }): Promise<MessageReactionSummary[]> {
+    const record = await this.messagesRepository.findRecordById(input.messageId);
+    const visible =
+      record?.conversationId === input.conversationId && (await this.messagesRepository.isVisibleTo(input.messageId, input.userId));
+    if (!visible) throw new AppError("Message not found", 404);
+
+    if (input.emoji) await this.messagesRepository.setReaction(input.messageId, input.userId, input.emoji);
+    else await this.messagesRepository.removeReaction(input.messageId, input.userId);
+
+    const reactions = await this.messagesRepository.getReactions(input.messageId);
+    const memberIds = await this.conversationsRepository.getAllMemberIds(input.conversationId);
+    broadcast(this.realtimeGateway, memberIds, {
+      type: "message:reactions",
+      conversationId: input.conversationId,
+      messageId: input.messageId,
+      reactions,
+    });
+    return reactions;
+  }
+
+  /**
+   * Relays a typing start/stop to the conversation's other active members.
+   * Non-members are ignored without a reply (nothing to probe). Repeated
+   * "started typing" events from the same user and chat are dropped within
+   * TYPING_REFRESH_MS, so a chatty client can't fan out a broadcast (and a
+   * membership query) per keystroke; "stopped" always goes through.
+   */
+  async setTyping(conversationId: string, userId: string, isTyping: boolean): Promise<void> {
+    const key = `${userId}:${conversationId}`;
+    const now = this.now();
+    if (isTyping) {
+      const last = this.typingSentAt.get(key);
+      if (last !== undefined && now - last < TYPING_REFRESH_MS) return;
+      this.typingSentAt.set(key, now);
+      if (this.typingSentAt.size > MAX_TRACKED_TYPISTS) this.pruneTyping(now);
+    } else {
+      this.typingSentAt.delete(key);
+    }
+
+    const members = await this.conversationsRepository.getActiveMembers(conversationId);
+    if (!members.some((member) => member.userId === userId)) {
+      this.typingSentAt.delete(key);
+      return;
+    }
+    broadcast(
+      this.realtimeGateway,
+      members.filter((member) => member.userId !== userId).map((member) => member.userId),
+      { type: "typing", conversationId, userId, isTyping }
+    );
+  }
+
+  private pruneTyping(now: number): void {
+    for (const [key, sentAt] of this.typingSentAt) {
+      if (now - sentAt >= TYPING_REFRESH_MS) this.typingSentAt.delete(key);
+    }
   }
 
   async markRead(conversationId: string, userId: string, upToMessageId: string): Promise<void> {

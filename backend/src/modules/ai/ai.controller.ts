@@ -157,4 +157,15 @@ export class AIController {
   analyzeVoice = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     res.status(200).json({ result: await this.services.voice.analyze(this.userId(req), req.params.attachmentId as string) });
   };
+
+  translateVoice = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    const { targetLanguage } = req.body as { targetLanguage: string };
+    const translation = await this.services.voice.translate(this.userId(req), req.params.attachmentId as string, targetLanguage);
+    res.status(200).json({ translation });
+  };
+
+  listVoiceTranslations = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    const translations = await this.services.voice.listTranslations(this.userId(req), req.params.attachmentId as string);
+    res.status(200).json({ translations });
+  };
 }

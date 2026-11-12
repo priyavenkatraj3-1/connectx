@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { isSupportedLanguage } from "./languages";
+import { isSupportedLanguage, isVoiceTranslationLanguage } from "./languages";
 
 /** Request-size limits for AI endpoints. They bound cost as much as abuse. */
 export const AI_LIMITS = {
@@ -86,7 +86,16 @@ export const transcribeSchema = z
   .object({ languageHint: z.string().regex(/^[a-z]{2,3}$/, "languageHint must be a language code like \"en\"").optional() })
   .strict();
 
-export const conversationParamsSchema = z.object({ conversationId: uuid("conversationId") });
+export const voiceTranslateSchema = z
+  .object({
+    targetLanguage: z
+      .string()
+      .trim()
+      .refine(isVoiceTranslationLanguage, "Voice messages can be translated into Tamil (ta), English (en), Hindi (hi), Telugu (te) or Malayalam (ml)"),
+  })
+  .strict();
+
+export const conversationParamsSchema =z.object({ conversationId: uuid("conversationId") });
 export const messageParamsSchema = z.object({ messageId: uuid("messageId") });
 export const memoryParamsSchema = z.object({ memoryId: uuid("memoryId") });
 export const actionParamsSchema = z.object({ actionId: uuid("actionId") });

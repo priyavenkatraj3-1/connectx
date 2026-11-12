@@ -172,6 +172,23 @@ export class CallsRepository {
     return id ? this.findById(id) : null;
   }
 
+  /**
+   * Calls still ringing in which the user is an invitee who hasn't answered
+   * yet (invited/ringing) — what a reconnecting device should ring for.
+   */
+  async findRingingInvitesFor(userId: string): Promise<CallDTO[]> {
+    const result = await this.db.query<{ call_id: string }>(
+      `SELECT p.call_id
+       FROM call_participants p
+       JOIN call_sessions s ON s.id = p.call_id
+       WHERE p.user_id = $1 AND p.role = 'invitee' AND p.state IN ('invited', 'ringing')
+         AND s.state = 'ringing' AND s.ended_at IS NULL`,
+      [userId]
+    );
+    const calls = await Promise.all(result.rows.map((row) => this.findById(row.call_id)));
+    return calls.filter((call): call is CallDTO => call !== null);
+  }
+
   /** IDs of live calls in which the user is currently joined. */
   async findLiveCallIdsJoinedBy(userId: string): Promise<string[]> {
     const result = await this.db.query<{ call_id: string }>(

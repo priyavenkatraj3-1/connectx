@@ -44,7 +44,6 @@ function exposedClientStatus(err: unknown): number | null {
   return null;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 export function errorHandler(err: unknown, req: Request, res: Response, _next: NextFunction): void {
   if (isInvalidInputDbError(err)) {
     res.status(400).json({ error: { message: "Invalid request: a value has the wrong format or is out of range" } });

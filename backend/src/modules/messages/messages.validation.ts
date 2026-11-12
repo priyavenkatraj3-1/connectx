@@ -30,8 +30,26 @@ export const editMessageSchema = z.object({
   mentionedUserIds: mentionedUserIdsSchema,
 });
 
+/**
+ * One emoji (any, including skin tones, flags, keycaps and ZWJ sequences),
+ * nothing else: no text, no whitespace. ≤16 UTF-16 units fits the column.
+ */
+const EMOJI_PATTERN = /^(?:\p{Extended_Pictographic}|\p{Regional_Indicator}|[#*0-9]\uFE0F?\u20E3)(?:\p{Emoji_Modifier}|\uFE0F|\u200D(?:\p{Extended_Pictographic}|\p{Regional_Indicator})|\p{Regional_Indicator})*$/u;
+
+export const reactionSchema = z.object({
+  emoji: z
+    .string()
+    .min(1, "Pick an emoji")
+    .max(16, "That reaction is too long")
+    .regex(EMOJI_PATTERN, "Reactions must be a single emoji"),
+});
+
 export const markReadSchema = z.object({
   upToMessageId: z.string().uuid("upToMessageId must be a valid message ID"),
+});
+
+export const searchMessagesQuerySchema = z.object({
+  q: z.string().trim().min(1, "Enter something to search for").max(100, "Search text is too long"),
 });
 
 export const listMessagesQuerySchema = z.object({
@@ -51,3 +69,4 @@ export const messageParamsSchema = z.object({
 export type SendMessageInput = z.infer<typeof sendMessageSchema>;
 export type EditMessageInput = z.infer<typeof editMessageSchema>;
 export type MarkReadInput = z.infer<typeof markReadSchema>;
+export type ReactionInput = z.infer<typeof reactionSchema>;

@@ -1,7 +1,7 @@
 import type { Response } from "express";
 import type { AuthenticatedRequest } from "../../middleware/requireAuth";
 import type { MessagesService } from "./messages.service";
-import type { EditMessageInput, MarkReadInput, SendMessageInput } from "./messages.validation";
+import type { EditMessageInput, MarkReadInput, ReactionInput, SendMessageInput } from "./messages.validation";
 
 export class MessagesController {
   constructor(private readonly messagesService: MessagesService) {}
@@ -50,6 +50,31 @@ export class MessagesController {
       userId: req.user!.userId,
     });
     res.status(204).send();
+  };
+
+  search = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    const results = await this.messagesService.searchMessages(req.params.conversationId as string, req.user!.userId, req.query.q as string);
+    res.status(200).json({ results });
+  };
+
+  react = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    const reactions = await this.messagesService.setReaction({
+      conversationId: req.params.conversationId as string,
+      messageId: req.params.messageId as string,
+      userId: req.user!.userId,
+      emoji: (req.body as ReactionInput).emoji,
+    });
+    res.status(200).json({ reactions });
+  };
+
+  unreact = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    const reactions = await this.messagesService.setReaction({
+      conversationId: req.params.conversationId as string,
+      messageId: req.params.messageId as string,
+      userId: req.user!.userId,
+      emoji: null,
+    });
+    res.status(200).json({ reactions });
   };
 
   markRead = async (req: AuthenticatedRequest, res: Response): Promise<void> => {

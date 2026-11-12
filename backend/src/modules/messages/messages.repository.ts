@@ -3,7 +3,15 @@ import { generateId } from "../../utils/id";
 import type { ActiveMembership } from "../conversations/conversations.types";
 import type { MediaRepository } from "../media/media.repository";
 import { toAttachmentDTO } from "../media/media.types";
-import type { MessageDTO, MessageMention, MessagePage, MessageStatus, ReplyPreview } from "./messages.types";
+import type {
+  MessageDTO,
+  MessageMention,
+  MessagePage,
+  MessageReactionSummary,
+  MessageStatus,
+  ReplyPreview,
+  StatusReplyReference,
+} from "./messages.types";
 
 interface MessageRow {
   id: string;
@@ -18,6 +26,9 @@ interface MessageRow {
   edited_at: Date | null;
   deleted_at: Date | null;
   client_message_id: string | null;
+  status_reply_status_id: string | null;
+  status_reply_type: "text" | "image" | "video" | null;
+  status_reply_preview: string | null;
 }
 
 /** Bare message row, without the joined/aggregated fields a MessageDTO carries. */
@@ -36,7 +47,8 @@ export interface MessageRecord {
 const SELECT_MESSAGE = `
   SELECT m.id, m.conversation_id, m.sender_id, u.display_name AS sender_display_name,
          p.avatar_url AS sender_avatar_url, m.content_type, m.body, m.reply_to_message_id,
-         m.created_at, m.edited_at, m.deleted_at, m.client_message_id
+         m.created_at, m.edited_at, m.deleted_at, m.client_message_id,
+         m.status_reply_status_id, m.status_reply_type, m.status_reply_preview
   FROM messages m
   JOIN users u ON u.id = m.sender_id
   LEFT JOIN user_profiles p ON p.user_id = m.sender_id
@@ -107,13 +119,26 @@ export class MessagesRepository {
     mentionedUserIds: string[];
     attachmentId: string | null;
     clientMessageId?: string | null;
+    statusReply?: StatusReplyReference | null;
   }): Promise<string> {
     const id = generateId();
     await this.db.withTransaction(async (tx) => {
       await tx.query(
-        `INSERT INTO messages (id, conversation_id, sender_id, content_type, body, reply_to_message_id, client_message_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [id, input.conversationId, input.senderId, input.contentType, input.body, input.replyToMessageId, input.clientMessageId ?? null]
+        `INSERT INTO messages (id, conversation_id, sender_id, content_type, body, reply_to_message_id, client_message_id,
+                               status_reply_status_id, status_reply_type, status_reply_preview)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+        [
+          id,
+          input.conversationId,
+          input.senderId,
+          input.contentType,
+          input.body,
+          input.replyToMessageId,
+          input.clientMessageId ?? null,
+          input.statusReply?.statusId ?? null,
+          input.statusReply?.type ?? null,
+          input.statusReply?.preview ?? null,
+        ]
       );
 
       for (const userId of input.mentionedUserIds) {
@@ -325,11 +350,12 @@ export class MessagesRepository {
 
     const replyIds = [...new Set(rows.map((row) => row.reply_to_message_id).filter((id): id is string => Boolean(id)))];
 
-    const [replies, mentions, attachments, receipts] = await Promise.all([
+    const [replies, mentions, attachments, receipts, reactions] = await Promise.all([
       this.loadReplyPreviews(replyIds),
       this.loadMentions(ids),
       this.mediaRepository.findByMessageIds(ids),
       this.getReceipts(ids),
+      this.loadReactions(ids),
     ]);
 
     const attachmentByMessage = new Map(attachments.map((a) => [a.messageId!, toAttachmentDTO(a)]));
@@ -348,7 +374,72 @@ export class MessagesRepository {
       mentions: mentions.get(row.id) ?? [],
       attachment: attachmentByMessage.get(row.id) ?? null,
       clientMessageId: row.client_message_id ?? null,
+      reactions: reactions.get(row.id) ?? [],
+      statusReply:
+        row.status_reply_status_id && row.status_reply_type
+          ? { statusId: row.status_reply_status_id, type: row.status_reply_type, preview: row.status_reply_preview }
+          : null,
     }));
+  }
+
+  /**
+   * Text search within one conversation, newest first: only non-deleted
+   * messages the viewer may see (same join-time rule as listByConversation).
+   * A plain case-insensitive substring match (strpos, not LIKE), so the
+   * query's characters — including % and _ — always match literally.
+   */
+  async searchInConversation(conversationId: string, viewerId: string, query: string, members: ActiveMembership[], limit: number): Promise<MessageDTO[]> {
+    const result = await this.db.query<MessageRow>(
+      `${SELECT_MESSAGE}
+       WHERE m.conversation_id = $1 AND m.deleted_at IS NULL
+         AND m.created_at >= (SELECT joined_at FROM conversation_members WHERE conversation_id = $1 AND user_id = $2)
+         AND strpos(lower(m.body), lower($3)) > 0
+       ORDER BY m.created_at DESC
+       LIMIT $4`,
+      [conversationId, viewerId, query, limit]
+    );
+    return this.hydrate(result.rows, members);
+  }
+
+  /** Sets the user's reaction on a message, replacing any previous one (one reaction per person). */
+  async setReaction(messageId: string, userId: string, emoji: string): Promise<void> {
+    // Atomic thanks to uq_message_reactions_message_user (006): concurrent reactions by one person can't both stick.
+    await this.db.query(
+      `INSERT INTO message_reactions (message_id, user_id, emoji) VALUES ($1, $2, $3)
+       ON CONFLICT (message_id, user_id) DO UPDATE SET emoji = EXCLUDED.emoji, created_at = now()`,
+      [messageId, userId, emoji]
+    );
+  }
+
+  async removeReaction(messageId: string, userId: string): Promise<void> {
+    await this.db.query("DELETE FROM message_reactions WHERE message_id = $1 AND user_id = $2", [messageId, userId]);
+  }
+
+  async getReactions(messageId: string): Promise<MessageReactionSummary[]> {
+    return (await this.loadReactions([messageId])).get(messageId) ?? [];
+  }
+
+  private async loadReactions(messageIds: string[]): Promise<Map<string, MessageReactionSummary[]>> {
+    const byMessage = new Map<string, MessageReactionSummary[]>();
+    if (messageIds.length === 0) return byMessage;
+    const result = await this.db.query<{ message_id: string; user_id: string; emoji: string }>(
+      `SELECT message_id, user_id, emoji FROM message_reactions
+       WHERE message_id IN (${placeholders(messageIds)})
+       ORDER BY created_at ASC, user_id ASC`,
+      messageIds
+    );
+    for (const row of result.rows) {
+      const list = byMessage.get(row.message_id) ?? [];
+      const entry = list.find((r) => r.emoji === row.emoji);
+      if (entry) {
+        entry.count += 1;
+        entry.userIds.push(row.user_id);
+      } else {
+        list.push({ emoji: row.emoji, count: 1, userIds: [row.user_id] });
+      }
+      byMessage.set(row.message_id, list);
+    }
+    return byMessage;
   }
 
   private async loadReplyPreviews(messageIds: string[]): Promise<Map<string, ReplyPreview>> {

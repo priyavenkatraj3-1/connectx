@@ -71,13 +71,13 @@ export function createApp(overrides: ContainerOverrides = {}): AppInstance {
   // Phase 6: every other request's bearer token must belong to an active (not revoked) session.
   apiV1.use(createSessionGuard(container.sessionsService));
 
-  apiV1.use("/users", createUsersRouter(container.usersService, limiters.search));
+  apiV1.use("/users", createUsersRouter(container.usersService, limiters.search, limiters.uploads));
   apiV1.use("/conversations", createConversationsRouter(container.conversationsService));
-  apiV1.use("/messages", createMessagesRouter(container.messagesService, container.conversationsService, limiters.messages));
+  apiV1.use("/messages", createMessagesRouter(container.messagesService, container.conversationsService, limiters.messages, limiters.search));
   apiV1.use("/groups", createGroupsRouter(container.groupsService));
   apiV1.use("/media", createMediaRouter(container.mediaService, container.maxUploadBytes, limiters.uploads));
   apiV1.use("/calls", createCallsRouter(container.callsService, limiters.callStarts));
-  apiV1.use("/statuses", createStatusesRouter(container.statusesService, limiters.statuses));
+  apiV1.use("/statuses", createStatusesRouter(container.statusesService, limiters.statuses, { service: container.statusRepliesService, limiter: limiters.messages }));
   apiV1.use("/privacy", privacyRouter);
   apiV1.use("/ai", createAIRouter(container.ai));
 

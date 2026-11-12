@@ -131,8 +131,9 @@ export function sanitizeFilename(rawName: string): string {
   const baseName = rawName.split(/[\\/]/).pop() ?? "";
   let cleaned = baseName
     .normalize("NFKC")
+    // eslint-disable-next-line no-control-regex -- stripping control characters is the point
     .replace(/[\u0000-\u001f\u007f]/g, "")
-    .replace(/[^\p{L}\p{N} ._()\-]/gu, "_")
+    .replace(/[^\p{L}\p{N} ._()-]/gu, "_")
     .replace(/\s+/g, " ")
     .trim()
     .replace(/^\.+/, "");

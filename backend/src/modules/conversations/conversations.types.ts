@@ -31,7 +31,21 @@ export interface ConversationSummary {
   lastMessage: LastMessagePreview | null;
   unreadCount: number;
   updatedAt: Date;
+  /** Your own list preferences for this chat (private to you). */
+  pinned: boolean;
+  archived: boolean;
+  /** Muted until this time (in the future), or null when not muted. */
+  mutedUntil: Date | null;
 }
+
+export interface ChatPreferences {
+  pinned: boolean;
+  archived: boolean;
+  mutedUntil: Date | null;
+}
+
+/** How long to mute a chat: 8 hours, a week, until unmuted, or unmute now. */
+export type MuteOption = "8h" | "1w" | "always" | "off";
 
 /** An active member's row in conversation_members — what visibility and receipt logic needs. */
 export interface ActiveMembership {
