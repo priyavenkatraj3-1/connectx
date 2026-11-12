@@ -170,11 +170,13 @@ ones:
 | `WEBRTC_TURN_SECRET` (+ `WEBRTC_TURN_TTL_SECONDS`) | Recommended TURN auth: short-lived per-user credentials (coturn `use-auth-secret`) |
 | `WEBRTC_TURN_USERNAME` / `WEBRTC_TURN_CREDENTIAL` | Alternative static TURN credentials |
 | `CALL_RING_TIMEOUT_SECONDS` | How long a call rings before it's missed (default `45`) |
-| `AI_PROVIDER` / `AI_PROVIDER_API_KEY` / `AI_MODEL` | AI provider: `none` (default — AI features report "not configured") or `anthropic`. See [docs/ai.md](docs/ai.md#configuration) |
+| `AI_PROVIDER` / `AI_PROVIDER_API_KEY` / `AI_MODEL` | AI provider: `none` (default — AI features report "not configured"), `anthropic`, or `gemini`. See [docs/ai.md](docs/ai.md#configuration) |
+| `GEMINI_API_KEY` / `GEMINI_MODEL` | Required when `AI_PROVIDER=gemini` (no default model) |
 | `AI_RATE_LIMIT_PER_MINUTE` / `AI_RATE_LIMIT_PER_DAY` | Per-user AI request limits (default `10` / `200`) |
 | `TRANSCRIPTION_PROVIDER` / `TRANSCRIPTION_BASE_URL` | Speech-to-text for Voice Intelligence: `none` (default) or `whisper-http` |
 | `RATE_LIMIT_*`, `AUTH_RATE_LIMIT_MAX`, `*_RATE_LIMIT_PER_*`, `WS_*` | Server-side abuse limits (in memory, per process) — see [docs/security.md](docs/security.md#9-rate-limiting-and-abuse-protection) |
 | `SCHEDULER_INTERVAL_SECONDS` | How often the in-process scheduler checks for due reminders, tasks and scheduled messages (default `15`, minimum `5`) |
+| `BACKGROUND_JOBS_ENABLED` | `true` (default) or `false`; any other value stops startup. `false` is intended only for isolated local manual testing: it skips stale-call and scheduled-message recovery, expired-status cleanup and all scheduler processing (reminders, task-due notifications, scheduled messages). Skipped work isn't cancelled, so overdue items run on the next start with jobs on. Never set it to `false` in production |
 
 The frontend reads `VITE_API_BASE_URL` (defaults to
 `http://localhost:4000/api/v1`) and `VITE_WS_URL` (defaults to the same
@@ -416,9 +418,29 @@ Calls and status (Phase 4):
   transit (DTLS-SRTP), but signaling goes through the server and there's no
   key verification. Peer-to-peer calls can reveal participants' IP
   addresses to each other.
-- Status: no replies/reactions/muting; privacy can't be edited after
-  posting; being added to a group grants `everyone`-level visibility
+- Status: replies are supported (sent as a direct message with a snapshot
+  of the status); no reactions to statuses or muting someone's updates;
+  privacy can't be edited after posting; being added to a group grants `everyone`-level visibility
   without consent; media isn't re-encoded (EXIF preserved).
+
+Chat features added after Phase 7 (typing, reactions, search, pin/archive/mute, contact info, status replies, PDF preview, call-invite replay):
+
+- **Mute is in-app only** — it silences @mention notifications and keeps
+  the chat out of the unread total; there are no push/sound notifications
+  to mute. At most 5 pinned chats; archived chats stay archived on new
+  messages.
+- **Search** is a plain substring match within one chat (no index, no
+  stemming), newest 30 results; results older than the loaded history
+  can be read in the results list but not jumped to.
+- **Reactions**: one per person per message; the picker offers a curated
+  set of emoji (any single emoji is accepted by the API).
+- **Typing indicator** state lives in server memory (single instance, like
+  the WebSocket registry).
+- **Document preview**: PDFs open in the browser's own viewer from the
+  authenticated download (some mobile browsers can't show PDFs inline —
+  download instead). DOCX/PPTX/XLSX are download-only: previewing them
+  needs a server-side conversion service, and public third-party viewers
+  would expose private files.
 
 Carried over from Phase 3:
 

@@ -109,9 +109,50 @@ Returns
 `statusMessage` only; email is never included in results. Excludes the
 requesting user.
 
+### `PUT /api/v1/users/me/avatar` · `DELETE /api/v1/users/me/avatar` — requires auth
+
+Sets or removes **your own** profile picture (the user always comes from
+the access token; there is no route that writes another user's picture).
+`PUT` takes the raw image bytes as the body (any `Content-Type`): the type
+is decided from the bytes — JPEG, PNG or WebP only (`415` otherwise,
+including SVG, GIF, HTML and executables), at most 2MB (`413`), not empty
+(`400`). Rate-limited like uploads. Bytes go through the configured media
+storage (local disk or private Cloudinary) under a server-generated key
+`avatars/<userId>/<avatarId>`; `avatarUrl` becomes
+`/api/v1/users/<userId>/avatar/<avatarId>`. Replacing or removing a picture
+deletes the previous one. Both return your profile (same shape as
+`GET /users/me`) and send `user:updated` to your devices and everyone who
+shares an active chat with you. `PATCH /users/me` still accepts an external
+http(s) `avatarUrl` (or `null`); it can't set the server path form.
+
+The web app crops the picture to a square and re-encodes it as a 512px
+JPEG before uploading, which also strips EXIF metadata (e.g. GPS).
+
+### `GET /api/v1/users/:userId/avatar/:avatarId` — no auth
+
+Serves a user's **current** uploaded picture (an `<img>` can't send a
+token). A replaced/removed picture, a mismatched user/avatar pair or an
+unknown user is `404`; malformed IDs are `400`. Anyone with the URL can
+load it, whether or not they are signed in. Responses are `Cache-Control: public, immutable`
+(the URL changes with the picture), `Cross-Origin-Resource-Policy:
+cross-origin` (shown by the app from another origin), with a sandboxing
+CSP and `nosniff`.
+
+Profile pictures are therefore **public**: the URL works without signing
+in, and the web app tells users this next to the photo controls. Because
+responses are cacheable, replacing or removing a picture stops the server
+serving it but doesn't guarantee that copies already cached by browsers
+or other HTTP caches disappear. The `privacy_settings.profile_photo_visibility`
+column exists in the schema but is currently unused — it doesn't restrict
+who can load an avatar.
+
 ### `GET /api/v1/users/:userId` — requires auth
 
-Returns another user's public profile (same shape as one search result).
+Returns another user's public profile (same shape as one search result),
+used by a direct chat's **Contact info** panel. It also includes `bio`, but
+only when the requester is that user or shares an active conversation
+(direct or group, neither having left) with them — otherwise the field is
+absent. `404` for an unknown user.
 
 ## Conversations — `modules/conversations` (direct + group)
 
@@ -157,6 +198,25 @@ Returns `{ conversation }`. `403` if you are not a member.
 
 Group conversations are created through `POST /groups` (below), then read
 and messaged through these same conversation/message endpoints.
+
+### `PATCH /api/v1/conversations/:conversationId/preferences` — requires auth
+
+Your own list settings for a chat; private to you. Body (at least one field,
+nothing else): `{ pinned?: boolean, archived?: boolean, mute?: "8h" | "1w" | "always" | "off" }`.
+Returns `{ preferences: { pinned, archived, mutedUntil } }`; your other
+devices receive `conversation:preferences`. `404` if you're not an active
+member, `400` for an invalid body or a 6th pin (**at most 5 pinned chats**).
+Archiving a pinned chat unpins it; pinning an archived chat unarchives it.
+The mute end time is computed by the server (`always` = until you unmute).
+`GET /conversations` includes `pinned`, `archived` and `mutedUntil` (null
+when not muted or the mute has expired) on every chat.
+
+**What mute does** — only what ConnectX has: a muted chat creates no
+in-app @mention notifications for you, and its unread count stays out of
+the total unread badge (the chat row still shows it, greyed). ConnectX
+has no push, email, sound or OS notifications, so there is nothing else
+to silence. Archived chats stay archived when new messages arrive and are
+also left out of the total.
 
 ## Groups — `modules/groups` (Phase 3)
 
@@ -345,6 +405,25 @@ sender whose messages just became read-by-everyone receives
 `message:status`. Your own other sessions receive `conversation:unread`.
 Returns `204`.
 
+### `GET /api/v1/messages/:conversationId/search?q=<text>` — requires auth + membership
+
+Case-insensitive substring search of message text in one conversation,
+newest first, at most 30 results: `{ results: MessageDTO[] }`. Only
+non-deleted messages you may see (sent after you joined) are searched; the
+query matches literally (`%` and `_` are not wildcards). `q` is trimmed and
+must be 1–100 characters (`400`). Rate-limited like user search.
+
+### `PUT /api/v1/messages/:conversationId/:messageId/reaction` · `DELETE` (same path)
+
+Emoji reactions, **one per person per message**: `PUT { emoji }` sets or
+replaces yours, `DELETE` removes it (a no-op if you had none). `emoji`
+must be a single emoji — skin tones, flags, keycaps and ZWJ sequences
+included; text or whitespace is `400`. Both return
+`{ reactions: [{ emoji, count, userIds }] }` and send `message:reactions`
+to every active member. `404` if the message isn't one you can see in this
+conversation (deleted, from before you joined, or another chat's).
+`MessageDTO.reactions` carries the same summary.
+
 ## Media — `modules/media` (Phase 3 foundation)
 
 Flow: **upload** (creates a private, unattached attachment) → **send a
@@ -362,6 +441,16 @@ interface AttachmentDTO {
 ```
 
 The server-side storage key is never exposed.
+
+**In-chat voice recording** (frontend only, no extra endpoint): the composer's
+mic button records with the browser's `MediaRecorder` and uploads the result
+through this same flow, then sends it as a normal message with `attachmentId`
+(`contentType: "audio"`). The client names the file after the format actually
+recorded so validation stores it as audio: `voice-message-<UTC stamp>.weba`
+(WebM/Opus, Chrome/Edge → `audio/webm`), `.ogg` (Firefox → `audio/ogg`) or
+`.m4a` (Safari → `audio/mp4`), with the browser's declared type (codec
+parameters such as `;codecs=opus` are ignored). A `.webm` name is always
+stored as `video/webm`, so recordings never use it.
 
 ### `POST /api/v1/media?conversationId=<id>&filename=<name>[&mimeType=<type>]`
 ### `POST /api/v1/media?purpose=status&filename=<name>[&mimeType=<type>]` (Phase 4)
@@ -544,6 +633,17 @@ Owner only: `{ viewers: Array<{ userId, displayName, avatarUrl, viewedAt }> }`.
 Owner only (`403` if you can see but don't own it, `404` otherwise).
 Deletes the status, its views and its media. `204`; sends `status:deleted`.
 
+### `POST /api/v1/statuses/:statusId/reply`
+
+`{ body }` (1–4000 characters). Sends a normal direct message to the
+status owner (creating your direct chat if needed) and returns
+`201 { conversationId, message }`. The message carries
+`statusReply: { statusId, type, preview }` — a snapshot (the status text
+or caption, ≤100 characters; never the media), so it still reads correctly
+after the status expires. `404` if you can't see the status (same rule as
+viewing it), `400` for your own status. Clients can't set `statusReply` on
+ordinary messages. Rate-limited like sending messages.
+
 ### `GET /api/v1/statuses/privacy` · `PUT /api/v1/statuses/privacy`
 
 Your default privacy for new statuses: `{ privacy: { visibility, userIds } }`
@@ -572,6 +672,13 @@ close with `1001` (reconnect). Revoked sessions close with `4401`.
 Events are only ever sent to users entitled to them: active members of the
 conversation, plus the affected user for removals/leaves.
 
+Events are not replayed after a disconnect, so the web client refetches
+the chat list, the open chat and the status page when its socket reconnects.
+The one exception is calls: when a device connects while a call is still
+ringing for that user (an unanswered invitee, ring timeout not yet
+passed, still a member of the chat, not already in another call), the
+server re-sends `call:invite` to that connection only.
+
 **Server → client events** (`ServerEvent`, see `realtime/events.ts`):
 
 | `type` | Payload | Sent when |
@@ -596,6 +703,10 @@ conversation, plus the affected user for removals/leaves.
 | `status:created` · `status:deleted` | `{ statusId, userId }` | **Phase 4**: to the owner and allowed viewers |
 | `status:expired` | `{ statusIds, userId }` | **Phase 4**: from the expiry sweep, to the owner and allowed viewers |
 | `status:viewed` | `{ statusId, viewer, viewedAt, viewCount }` | **Phase 4**: owner only |
+| `typing` | `{ conversationId, userId, isTyping }` | Another member started/stopped typing — never sent to the typist. Clients drop a state that isn't refreshed within ~6s |
+| `message:reactions` | `{ conversationId, messageId, reactions }` | A message's reactions changed |
+| `user:updated` | `{ user: { id, displayName, avatarUrl, statusMessage } }` | Someone you share a chat with — or you, on another device — changed their name, status or picture |
+| `conversation:preferences` | `{ conversationId, pinned, archived, mutedUntil }` | You changed a chat's pin/archive/mute settings (to your own devices only) |
 | `error` | `{ message }` | The server couldn't process (or refused) your last client event |
 
 **Client → server events** (`ClientEvent`):
@@ -604,6 +715,7 @@ conversation, plus the affected user for removals/leaves.
 |---|---|---|
 | `message:read` | `{ conversationId, upToMessageId }` | Same as `POST /messages/:conversationId/read`, including the membership check (a non-member gets an `error` event and nothing is written) |
 | `ping` | — | No-op; the open connection itself is the liveness signal |
+| `typing` | `{ conversationId, isTyping }` | Relayed as `typing` to the other active members. Ignored silently for non-members and malformed payloads. Repeated `isTyping: true` from the same user and chat within 2s isn't relayed again (clients resend every 3s while typing); `false` always is |
 | `call:ring` · `call:accept` · `call:decline` · `call:cancel` · `call:end` · `call:connected` | `{ callId }` | **Phase 4** call lifecycle — see [calls.md](./calls.md#client--server) for who may send each |
 | `call:offer` · `call:answer` | `{ callId, toUserId, sdp }` | **Phase 4**: relayed to `toUserId`'s joined device (sender must be joined, from its bound connection) |
 | `call:ice_candidate` | `{ callId, toUserId, candidate: { candidate, sdpMid?, sdpMLineIndex?, usernameFragment? } }` | **Phase 4**: as above |
@@ -618,7 +730,7 @@ consent rules and error codes (`ai_disabled`, `ai_not_configured`,
 
 | Method & path | Purpose |
 |---|---|
-| `GET` / `PATCH /ai/settings` | Consent switches + preferred language; `GET` also returns provider status, supported languages, data-sharing disclosure |
+| `GET` / `PATCH /ai/settings` | Consent switches + preferred language; `GET` also returns provider status, supported languages, `voiceTranslationLanguages` (the five voice targets), data-sharing disclosure |
 | `GET /ai/exclusions` · `PUT` / `DELETE /ai/exclusions/:conversationId` | Chats excluded from the user's AI features |
 | `POST /ai/ask` | Ask Your Chats (`{ question, conversationIds[1..10], useMemory? }`) → answer + real source messages |
 | `GET` / `POST` / `DELETE /ai/memories` · `DELETE /ai/memories/:memoryId` | Explicit AI memory |
@@ -628,6 +740,8 @@ consent rules and error codes (`ai_disabled`, `ai_not_configured`,
 | `POST /ai/conversations/:conversationId/safety-scan` | Local scam heuristics over given message ids (no provider) |
 | `POST /ai/messages/:messageId/scam-check` · `POST /ai/messages/:messageId/safety-feedback` | AI scam check; dismiss/report a warning |
 | `GET /ai/voice/:attachmentId` · `POST …/transcribe` · `POST …/analyze` | Voice Intelligence |
+| `POST /ai/voice/:attachmentId/translate` | Translate **your own transcript** of a voice message: body `{ targetLanguage: "ta" \| "en" \| "hi" \| "te" \| "ml" }` → `{ translation: { attachmentId, targetLanguage, translatedText, detectedSourceLanguage, cached, generatedBy, updatedAt } }`, in the target language's native script. Needs `aiFeaturesEnabled` + `voiceEnabled` (`403 ai_disabled`) and a text provider (`503 ai_not_configured`); same attachment read check as downloading it (`403`/`404`); `400` for non-audio, an excluded chat (`ai_conversation_excluded`) or any other language; `409` before the voice message is transcribed. A repeat request returns the stored translation (`cached: true`, `generatedBy: null`) until you re-transcribe; concurrent identical requests share one provider call. Only the transcript text is sent — never the audio |
+| `GET /ai/voice/:attachmentId/translations` | `{ translations: [...] }` — your stored translations that still match your current transcript (no provider call) |
 
 Server → client events `ai:processing` / `ai:completed` / `ai:failed`
 (`{ requestId, feature, code? }`) are sent only to the requesting user and

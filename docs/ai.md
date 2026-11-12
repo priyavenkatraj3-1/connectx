@@ -31,7 +31,9 @@ routes (requireAuth + zod validation)
 |---|---|
 | `backend/src/modules/ai/interfaces/ai-provider.interface.ts` | Vendor-neutral `AIProvider` (`generate`: system + input → text or schema-constrained JSON) and `TranscriptionProvider` |
 | `providers/anthropic.provider.ts` | Claude via the official `@anthropic-ai/sdk`: structured outputs (`output_config.format`), `effort`, refusal handling, server-side refusal fallback (opt-out with `AI_REFUSAL_FALLBACK=false`). SDK retries are off — the gateway owns retries |
+| `providers/gemini.provider.ts` | Google Gemini via the official `@google/genai` SDK (Gemini Developer API): JSON-schema structured output, safety blocks → refusal, SDK retries off, key held in a `#private` field so it can't be serialized or logged |
 | `providers/whisper-http.transcription.ts` | Any Whisper-compatible `POST {base}/audio/transcriptions` endpoint |
+| `providers/gemini.transcription.ts` | Speech-to-text with Gemini audio understanding (`TRANSCRIPTION_PROVIDER=gemini`, reuses `GEMINI_API_KEY`): audio sent inline (base64, ≤ 14 MiB so the request stays under Gemini's 20 MB inline limit), JSON-schema output `{ text, language }`, transcript kept in the spoken language's own script, same refusal/error mapping and `#private` key handling as `gemini.provider.ts` |
 | `providers/none.provider.ts` | The default. Reports "not configured"; never returns output |
 | `providers/provider.factory.ts` | Picks providers from env; unknown names or missing keys fall back to `none` with a warning |
 | `ai.gateway.ts` | Rate limit, timeout, retry, output validation, usage log, status events |
@@ -53,7 +55,7 @@ content to a provider defaults **off**.
 | `chatRetrievalEnabled` | on* | Ask Your Chats, Group Decision AI, Smart Actions (*only meaningful once the master switch is on) |
 | `aiMemoryEnabled` | off | Saving memories, and including them in Ask Your Chats |
 | `spamShieldEnabled` | off | Local warnings (no provider); the per-message AI check additionally needs the master switch |
-| `voiceEnabled` | off | Sending audio to the transcription provider |
+| `voiceEnabled` | off | Sending audio to the transcription provider, and translating your transcripts |
 | `preferredLanguage` | `en` | Translation target |
 | Per-chat exclusion | — | `ai_conversation_exclusions`: the user's own AI features won't read, translate or transcribe that chat |
 
@@ -112,7 +114,8 @@ question is JSON-encoded too.
 | Group Decision AI | `POST /ai/conversations/:id/decision-summary` (`mode`: summary/decisions/open_issues) | text | Groups only. A "decision" needs explicit agreement in the messages; every item cites sources |
 | Translation | `POST /ai/messages/:id/translate` | text | On request only; original is never modified; cached per (message, language, source hash) |
 | Scam/Spam Shield | `POST /ai/conversations/:id/safety-scan` (local), `POST /ai/messages/:id/scam-check` (AI), `POST /ai/messages/:id/safety-feedback` | local / text | Warnings are advisory — messages are never blocked. Own messages and dismissed/reported ones are skipped. Reports are stored; no moderation pipeline yet |
-| Voice Intelligence | `GET /ai/voice/:attachmentId`, `POST …/transcribe`, `POST …/analyze` | transcription, then text | States: `transcribing → complete → processing → complete`, or `failed`. Audio size capped by `TRANSCRIPTION_MAX_AUDIO_MB` |
+| Voice Intelligence | `GET /ai/voice/:attachmentId`, `POST …/transcribe` (`{ languageHint? }`, e.g. `"es"`; omit to auto-detect), `POST …/analyze` | transcription, then text | Opt-in (`voiceEnabled`) and per user: each member transcribes for themselves; results are private. States: `transcribing → complete → processing → complete`, or `failed` (no speech is `failed` with "No speech was recognized…"). Concurrent requests for the same voice message by the same user share one provider call. Only mp3/m4a/ogg/wav/webm audio (`415` otherwise); the provider gets a neutral file name (`voice-message.<ext>`), never the user's. Size capped by `TRANSCRIPTION_MAX_AUDIO_MB` (`413`). Timeouts → `504 ai_timeout`, provider failures → `502`, per-user limit → `429`. A request interrupted by a restart reads as failed so it can be retried |
+| Voice translation | `POST /ai/voice/:attachmentId/translate` (`{ targetLanguage }`: `ta`, `en`, `hi`, `te`, `ml`), `GET …/translations` | text | Translates the requester's own transcript; the original audio and transcript are shown unchanged alongside it. Needs AI + Voice Intelligence consent and a text provider; same attachment read check, chat exclusions, `409` until transcribed. The prompt names the target script (Tamil, Devanagari, Telugu, Malayalam, Latin) and forbids transliteration; the output budget is 4 tokens per source character because Indic scripts are token-heavy. Stored in `ai_voice_translations` per (user, attachment, language) with a hash of the transcript: repeats are served from storage, re-transcribing invalidates them. Concurrent identical requests share one provider call |
 | Settings | `GET/PATCH /ai/settings`, `GET /ai/exclusions`, `PUT/DELETE /ai/exclusions/:conversationId` | none | `GET` also returns provider/transcription status, supported languages and the disclosure |
 
 All routes require a valid access token. Errors are `{ error: { message, code? } }`:
@@ -156,6 +159,7 @@ prompts, message content or model output.
 | `ai_translations` | Cached translations | Message edited/deleted |
 | `ai_message_flags` | Dismiss/report per user & message | Account or message deleted |
 | `ai_voice_results` | Transcript/summary per user & attachment | Account or attachment deleted |
+| `ai_voice_translations` | Translations of a user's transcript per attachment & language | Account, attachment or voice result deleted (stale after re-transcription) |
 | `ai_usage` | Feature, provider, model, status, token counts, latency — **no content** | Account deleted |
 | `ai_conversation_exclusions` | Chats excluded from AI | User re-includes, or account deleted |
 
@@ -164,17 +168,64 @@ its retention is governed by the provider's own terms, not by ConnectX.
 
 ## Configuration
 
-See `backend/.env.example`. To enable Claude:
+See `backend/.env.example`. Pick one text provider.
+
+Claude (Anthropic):
 
 ```
 AI_PROVIDER=anthropic
-AI_PROVIDER_API_KEY=sk-ant-...
+AI_PROVIDER_API_KEY=<your Anthropic API key>
 AI_MODEL=claude-opus-5
 ```
 
-The key is only read by the backend and never sent to the browser.
-Speech-to-text is separate: `TRANSCRIPTION_PROVIDER=whisper-http` +
-`TRANSCRIPTION_BASE_URL` (+ optional `TRANSCRIPTION_API_KEY`).
+Google Gemini (Gemini Developer API, official `@google/genai` SDK):
+
+```
+AI_PROVIDER=gemini
+GEMINI_API_KEY=<your Google AI Studio API key>
+GEMINI_MODEL=<a current Gemini model id, e.g. a Flash-tier model>
+```
+
+`GEMINI_MODEL` has no default — ConnectX won't guess a model name. If
+`GEMINI_API_KEY` or `GEMINI_MODEL` is empty, the server logs a warning
+(never the key) and AI features stay "not configured". `AI_MODEL`,
+`AI_EFFORT` and `AI_REFUSAL_FALLBACK` apply to Anthropic only. Everything
+else — consent, exclusions, prompt safety, rate limits, timeouts, retries,
+output validation and error codes — is identical for both providers,
+because both sit behind `AIGateway`.
+
+Gemini specifics (`providers/gemini.provider.ts`):
+
+- Structured output uses `responseMimeType: "application/json"` +
+  `responseJsonSchema`; nullable `type: [X, "null"]` fields are rewritten
+  to the equivalent `anyOf`, and the gateway still validates with zod.
+- Google safety blocks (blocked prompt, or finish reason `SAFETY`,
+  `RECITATION`, `BLOCKLIST`, `PROHIBITED_CONTENT`, `SPII`) map to
+  `422 ai_refused`; `MAX_TOKENS` marks output truncated.
+- The SDK's own retries are off (the gateway owns retries); it is pinned to
+  the Gemini Developer API (`vertexai: false`), and the key is passed
+  explicitly, so no other environment variable can redirect it.
+- **Free tier:** check Google's current Gemini API terms before enabling it
+  for real users — unpaid usage may let Google use prompts and responses to
+  improve its products. Set `AI_RATE_LIMIT_PER_MINUTE` / `AI_RATE_LIMIT_PER_DAY`
+  below your Gemini quota so users get ConnectX's `429` first.
+
+Keys are only read by the backend and never sent to the browser.
+Speech-to-text is configured separately, with one of:
+
+- `TRANSCRIPTION_PROVIDER=gemini` — Gemini audio understanding with the
+  same `GEMINI_API_KEY`. Model: `GEMINI_TRANSCRIPTION_MODEL`, else
+  `GEMINI_MODEL`. Missing key or model → transcription stays unavailable
+  (with a startup warning). Accepts mp3, m4a (sent as `audio/m4a`), ogg,
+  wav and webm up to 14 MiB (`413` above that, before anything is sent).
+  Audio counts toward your Gemini quota (about 32 tokens per second).
+- `TRANSCRIPTION_PROVIDER=whisper-http` + `TRANSCRIPTION_BASE_URL`
+  (+ optional `TRANSCRIPTION_API_KEY`, `TRANSCRIPTION_MODEL`).
+
+With `TRANSCRIPTION_PROVIDER=none` (the default) no Transcribe action is
+offered and the API answers `503 ai_not_configured` — transcription is
+never simulated. Voice translation uses the **text** provider
+(`AI_PROVIDER`), not the transcription one.
 
 ## Testing
 
@@ -194,8 +245,34 @@ see [manual-testing-phase5.md](./manual-testing-phase5.md) for that.
 - Requests are synchronous (no job queue); long provider calls hold the HTTP request.
 - Scam heuristics are English-centric pattern rules; they will miss scams and
   occasionally flag benign messages. Reports aren't reviewed by anyone yet.
-- Voice Intelligence works on uploaded audio attachments; in-app voice
-  recording still doesn't exist.
+- **Voice transcription needs a speech-to-text service you configure** —
+  none is bundled, and with `TRANSCRIPTION_PROVIDER=none` (the default)
+  the app shows no Transcribe action. `TRANSCRIPTION_PROVIDER=gemini`
+  reuses the Gemini key (inline audio only, ≤ 14 MiB; no Files API
+  upload for longer recordings). Any Whisper-compatible
+  `/audio/transcriptions` endpoint works (`TRANSCRIPTION_PROVIDER=whisper-http`
+  + `TRANSCRIPTION_BASE_URL` [+ `TRANSCRIPTION_API_KEY`, `TRANSCRIPTION_MODEL`]):
+  a hosted speech-to-text API (paid per audio minute — check the
+  provider's current price and data-retention terms before enabling), or a
+  self-hosted Whisper server with an OpenAI-compatible API (no per-minute
+  fee, but needs its own compute; CPU-only hosting is slow). The real
+  service is **not** exercised by the automated tests (a scripted provider
+  is). Long recordings are limited only by size (`TRANSCRIPTION_MAX_AUDIO_MB`,
+  default 25 — many hosted APIs cap uploads at about that); there is no
+  chunking of longer audio.
+- Voice Intelligence works on any audio attachment — uploaded files and
+  voice messages recorded in the chat composer (mic button, MediaRecorder).
+  Recordings are named so the server stores them as audio: Chrome/Edge
+  WebM/Opus as `.weba` (`audio/webm`), Firefox Ogg/Opus as `.ogg`, Safari
+  MP4 as `.m4a` (`audio/mp4`) — never `.webm`, which is stored as video and
+  would get no Transcribe/Translate. Recordings are capped at 10 minutes at
+  ~32 kbps (≈ 2.4 MB), inside Gemini's 14 MiB transcription limit.
 - Translation is per message on request — no automatic whole-chat translation.
+- Voice translation covers Tamil, English, Hindi, Telugu and Malayalam
+  targets only, and translates the transcript (so transcription errors carry
+  over). Speech-recognition accuracy for Telugu and Malayalam is generally
+  lower than for English or Hindi; picking the spoken language before
+  transcribing helps. Real-provider transcription/translation quality isn't
+  covered by automated tests.
 - A suggestion becomes a task/reminder/event only when the user explicitly creates one from it (Phase 6); nothing is created automatically.
 - Real-model output quality is not covered by automated tests.

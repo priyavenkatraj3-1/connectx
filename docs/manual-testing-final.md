@@ -31,13 +31,44 @@ build (git commit) and tester next to each section as you go.
 - [ ] **[A]** Unknown email and wrong password give the same error — `security.test.ts`
 - [ ] **[A]** Logout invalidates the session immediately; refresh rotation and reuse detection — `security.test.ts`, `sessions.test.ts`
 - [ ] **[M]** UI: the forms show server errors inline; after logout the back button doesn't reveal the app; reloading while signed in keeps you signed in; after 15+ minutes idle the app refreshes silently.
+- [ ] **[M]** Expired access token: sleep the computer (or leave the tab in the background) for 20+ minutes, wake it, then start a call and have the other user call you — no "Invalid or expired token" error, the incoming call rings, and the chat list shows messages sent meanwhile. Automated: `tokenRefresh.test.tsx`, `apiClient.test.ts`.
 - [ ] **[M]** Too many wrong logins (11 within 15 minutes from one IP) shows "Too many authentication attempts" rather than a broken page.
 
 ## 2. Direct chat
 
 - [ ] **[A]** Send/receive in real time, delivered/read receipts, unread counts, edit/delete own only, replies — `messages.test.ts`, `ws.test.ts`
 - [ ] **[A]** Outsider can't read/send/mark read — `security.test.ts`, `messages.test.ts`
-- [ ] **[M]** Two browsers: typing, ticks turning blue, unread badge clearing on Alice-2 when Alice reads on Alice-1, long messages wrap, emoji render.
+- [ ] **[M]** Two browsers: ticks turning blue, unread badge clearing on Alice-2 when Alice reads on Alice-1, long messages wrap, emoji render.
+
+## 2a. Chat features (added after Phase 7)
+
+Apply migrations 006–008 first (`npm run db:migrate --workspace=backend`).
+
+- [ ] **[A]** Contact info: bio only for people sharing a chat — `users.test.ts`, `ChatConversationPage.contact.test.tsx`
+- [ ] **[M]** Click Bob's name/avatar in the chat header (and the ⓘ button) → Contact info panel with name, status message and bio; on a phone the panel replaces the chat and closes back to it.
+- [ ] **[A]** Typing: relayed to other members only, outsiders ignored, throttled, stop on send/idle/switch — `typing-ws.test.ts`, `useTyping.test.tsx`, `ChatConversationPage.typing.test.tsx`
+- [ ] **[M]** Two browsers: Alice types → Bob sees "Alice is typing…" within a second; it disappears when Alice sends, clears the box, switches chat, or stops for ~4s; closing Alice's tab clears it within ~6s. Group: two typists → "A and B are typing…".
+- [ ] **[A]** Reactions: one per person, authorization, emoji validation, concurrency, live updates — `reactions.test.ts`, `MessageBubble.test.tsx`, `ChatConversationPage.reactions.test.tsx`
+- [ ] **[M]** React with 👍 from the hover smiley, switch to ❤️, remove it by clicking your chip; Bob sees each change live. The composer smiley inserts an emoji at the caret. Keyboard: Tab to the smiley, Enter, Tab through emoji, Escape closes.
+- [ ] **[A]** Search: membership, deleted/pre-join messages excluded, literal `%`/`_` — `message-search.test.ts`, `MessageSearchPanel.test.tsx`
+- [ ] **[M]** 🔍 in the chat header → type a word → matches highlighted, newest first; clicking a loaded result scrolls to it; an older result is marked "not loaded in this view".
+- [ ] **[A]** Pin/archive/mute: privacy, 5-pin cap, archive↔pin rules, mute silences @mentions, live sync — `chat-preferences.test.ts`, `ChatListPanel.preferences.test.tsx`
+- [ ] **[M]** Chat list ⋯ (or right-click a row): pin → moves to the top with a pin icon; 6th pin shows "You can pin up to 5 chats"; archive → moves to "Archived (n)"; mute 8h → bell icon, grey badge, Sidebar total excludes it, Bob @mentioning Alice creates no 🔔 notification. Alice-2 reflects every change live.
+- [ ] **[A]** Status reply: visibility rule, own status refused, snapshot survives expiry, can't be forged — `status-replies.test.ts`, `StatusViewer.test.tsx`
+- [ ] **[M]** Open Bob's status → type a reply (the story stops advancing; ←/→ move the caret) → Send → "Reply sent"; Bob sees it in his chat with Alice, quoting the status; still readable after 24h.
+- [ ] **[A]** PDF preview: authenticated fetch, blob: URL, Office files download-only — `AttachmentView.test.tsx`
+- [ ] **[M]** Desktop Chrome/Edge/Firefox: 👁 on a PDF opens it in-app; Download from the preview saves it with its name. Android Chrome / iOS Safari: if nothing renders, the "download it instead" link works. DOCX/XLSX/PPTX show no preview button.
+- [ ] **[A]** Call-invite replay: rings on connect while still ringing; never after answer/decline/cancel/timeout; not to outsiders or busy users; stale incoming screen cleared after reconnect — `calls-replay-ws.test.ts`, `CallContext.test.tsx`
+- [ ] **[M]** Bob closes the app; Alice calls; Bob opens ConnectX within the ring time → it rings. Bob turns Wi-Fi off while ringing, Alice cancels, Wi-Fi back on → Bob's ringing screen goes away.
+
+## 2b. Voice-note transcription (needs a real speech-to-text endpoint)
+
+- [ ] **[A]** Opt-in, authorization (incl. after leaving a group), per-user results, concurrent requests share one call, retry after failure, no speech, unsupported format, size limit, timeout, rate limit, provider not configured — `voice-transcription.test.ts`, `ai-features.test.ts`, `VoiceTranscription.test.tsx` (scripted provider; no real speech-to-text is called)
+- [ ] **[I]** Configure `TRANSCRIPTION_PROVIDER=whisper-http`, `TRANSCRIPTION_BASE_URL` (and key/model) on a non-production backend. Without it, confirm voice messages show no Transcribe action.
+- [ ] **[M]** Settings → AI: turn on Voice Intelligence. Bob sends a voice note (mp3/m4a/ogg/wav/webm). Alice: Transcribe (auto-detect) → "Transcribing…" → transcript beneath the audio with the detected language; Copy works. Pick a language and Transcribe again. A silent recording → "No speech was recognized…" with Try again.
+- [ ] **[M]** Bob sees no transcript until he transcribes it himself. Eve (not in the chat) can't reach it. Double-clicking Transcribe or clicking in two tabs bills one transcription (check the provider's usage).
+- [ ] **[M]** In-chat recording, in a direct chat and a group, in Chrome/Edge, Firefox and Safari: click the mic → the browser asks for permission only now → the timer counts up → Stop → an audio preview plays in the composer → Send → the message plays in the chat and offers Transcribe/Translate. Discard while recording sends nothing; the browser's mic indicator turns off after Stop, Discard, switching chats, and closing the chat. Denying permission shows "ConnectX needs permission to use your microphone…".
+- [ ] **[M]** A recording over `TRANSCRIPTION_MAX_AUDIO_MB` is refused with "too large to transcribe"; stopping the transcription server shows a clear error and Try again works once it's back.
 
 ## 3. Group chat
 
@@ -47,7 +78,7 @@ build (git commit) and tester next to each section as you go.
 ## 4. Media
 
 - [ ] **[A]** Allowed types, magic-byte mismatch, disguised executable, oversize (413), unauthorized download (403/404) — `media.test.ts`, `file-validation.test.ts`, `security.test.ts`
-- [ ] **[M]** Image/video/audio preview and playback; PDF/ZIP download with the right filename; upload progress and cancel; a 26MB file is refused before upload.
+- [ ] **[M]** Image/video/audio preview and playback; PDF/Office/ZIP download with the right filename (PDFs can also be previewed in-app, see 2a; Office files are download-only); upload progress and cancel; a file just over `VITE_MAX_UPLOAD_MB` (10 MB on the Cloudinary free plan, default 25) is refused before upload with "Files can be at most …MB".
 - [ ] **[I]** Media survives a backend restart (persistent `UPLOAD_DIR`) and a backup/restore.
 
 ## 5. Status

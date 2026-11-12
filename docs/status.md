@@ -104,8 +104,12 @@ isn't already used.
 
 ## Known limitations
 
-- No replies/reactions to statuses, no muting someone's updates, no
-  per-status privacy editing after publishing (delete and re-post).
+- Replies are supported: `POST /statuses/:id/reply` sends a direct message
+  to the owner with a snapshot of the status (type + text/caption preview,
+  never the media), so it survives the status expiring. Only people who
+  can see the status may reply. No reactions to statuses, no muting
+  someone's updates, no per-status privacy editing after publishing
+  (delete and re-post).
 - No thumbnails/transcoding; images keep their metadata (EXIF) as
   uploaded — same as chat media.
 - Deleted/expired status media is removed from storage, but the sweep runs

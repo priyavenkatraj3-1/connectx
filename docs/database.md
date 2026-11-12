@@ -141,6 +141,7 @@ Every AI table references its owning user `ON DELETE CASCADE`. See [ai.md](./ai.
 | `ai_translations` | Translation cache per (message, language), tied to a SHA-256 of the source text; purged on edit/delete |
 | `ai_message_flags` | Scam-warning dismiss/report per (user, message) |
 | `ai_voice_results` | Transcript / summary / action items per (user, audio attachment) |
+| `ai_voice_translations` | Migration 009. Translation of a user's own transcript per (user, audio attachment, target language) — `ta`/`en`/`hi`/`te`/`ml`. FK to `ai_voice_results` (and users/attachments) with `ON DELETE CASCADE`; `source_hash` (SHA-256 of the transcript translated) makes a translation stale once the voice message is re-transcribed. The audio and transcript are never modified |
 | `ai_usage` | Replaces `ai_conversations`. Metadata only (feature, provider, model, status, tokens, latency) — **never prompt or output text**. Also backs the daily AI limit |
 
 ### Productivity, collaboration & organization (Phase 6)
@@ -204,6 +205,10 @@ Three reasons, all deliberate:
 | `003_calls_status.sql` | 4 | `call_sessions`, `call_participants`, `call_events`; `attachments.purpose` (default `message`) with `conversation_id` now nullable for status media (a `CHECK` keeps message attachments tied to a conversation); `statuses` dropped and re-created (never used before), `status_audience`, `status_views`, `status_privacy_settings`, `status_privacy_users`. Existing rows untouched |
 | `004_ai_layer.sql` | 5 | New `privacy_settings` AI columns; `ai_conversation_exclusions`, `ai_translations`, `ai_message_flags`, `ai_voice_results`, `ai_usage`. The never-used Phase 1 placeholders `ai_conversations`, `ai_memories`, `ai_actions` are dropped (`ai_memories`/`ai_actions` re-created). All other data untouched |
 | `005_productivity.sql` | 6 | `user_preferences`, `focused_conversations`, `tasks`, `reminders`, `calendar_events`, `shared_notes`, `shared_todo_lists`, `shared_todo_items`, `pinned_messages`, `saved_messages`, `scheduled_messages`, `business_profiles`, `quick_replies`; `messages.client_message_id` (+ partial unique index), `ai_actions.converted_to`/`converted_id`, `sessions.last_seen_at`. The never-used Phase 1 `notifications` placeholder is dropped and re-created. All other data untouched |
+| `006_message_reactions.sql` | after 7 (chat features) | Unique index `(message_id, user_id)` on the Phase 1 `message_reactions` table (unused until now): one reaction per person, upserted atomically |
+| `007_chat_preferences.sql` | after 7 (chat features) | `conversation_members.pinned_at`, `archived_at` (per-user chat list settings; mute reuses the Phase 1 `muted_until`) |
+| `008_status_replies.sql` | after 7 (chat features) | `messages.status_reply_status_id`, `status_reply_type`, `status_reply_preview` — a snapshot (no FK: statuses are deleted when they expire) |
+| `009_voice_translations.sql` | Voice translation | New `ai_voice_translations` table (PK `(user_id, attachment_id, target_language)`, index on `voice_result_id`). Purely additive — no existing table or row changes |
 
 Apply with `npm run db:migrate --workspace=backend` (idempotent; each file
 runs once, in its own transaction, recorded in `schema_migrations`).

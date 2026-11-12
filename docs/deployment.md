@@ -102,6 +102,12 @@ VITE_MAX_UPLOAD_MB=25 \
 npm run build --workspace=frontend         # → frontend/dist
 ```
 
+The build **fails** if `VITE_API_BASE_URL` is missing, empty or not an
+absolute `http(s)://` URL, or if `VITE_WS_URL` is set but isn't a `ws(s)://`
+URL — the app's `http://localhost:4000/api/v1` fallback is for `vite` dev
+mode only. Pointing either at `localhost`/`127.0.0.1` explicitly is allowed
+but prints a warning, since that bundle only works next to the backend.
+
 Serve `frontend/dist` from any static host with an SPA fallback (unknown
 paths → `index.html`). Recommended response headers on the static host:
 
@@ -144,7 +150,11 @@ location / {
 
 - Set **`TRUST_PROXY=1`** (one proxy hop) so rate limits key on real client
   IPs. Without it, everyone shares the proxy's IP and the per-IP limits
-  lock all users out together. Don't set `true` unless every hop is trusted.
+  lock all users out together. With `NODE_ENV=production` the server
+  refuses to start when `TRUST_PROXY` is unset, `false`/`0`, or `true`
+  (which trusts any client-supplied `X-Forwarded-For`, so clients could
+  dodge per-IP limits). A list of proxy IPs/subnets or `loopback` is also
+  accepted.
 - Set **`CLIENT_ORIGIN`** to the exact frontend origin(s), e.g.
   `https://chat.example.com`. It controls CORS *and* the WebSocket
   Origin check — a mismatch shows up as failed WebSocket handshakes (403).
@@ -164,16 +174,20 @@ Production essentials:
 | `DATABASE_URL` | Your PostgreSQL URL (with TLS if remote) |
 | `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET` | Two different random values ≥ 32 chars (`node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"`) |
 | `CLIENT_ORIGIN` | Exact frontend origin(s), comma-separated, never `*` |
-| `TRUST_PROXY` | `1` behind one reverse proxy |
-| `UPLOAD_DIR` | Absolute path on persistent, backed-up storage |
+| `TRUST_PROXY` | `1` behind one reverse proxy (required: unset, `false`, `0` and `true` are refused) |
+| `MEDIA_STORAGE`, `CLOUDINARY_URL` | `cloudinary` with its URL; `local` is refused unless `ALLOW_LOCAL_MEDIA_STORAGE=true` (see §7) |
+| `UPLOAD_DIR` | Only with `MEDIA_STORAGE=local`: absolute path on persistent, backed-up storage |
 | `MAX_UPLOAD_SIZE_MB` | Match the proxy body limit and `VITE_MAX_UPLOAD_MB` |
 | `LOG_LEVEL` | `info` (or `warn`) |
 | `WEBRTC_STUN_URLS`, `WEBRTC_TURN_URLS`, `WEBRTC_TURN_SECRET` | Your STUN/TURN (coturn `use-auth-secret`) |
 | `AI_PROVIDER`, `AI_PROVIDER_API_KEY` | Leave `none` unless you intend to send selected chat content to that provider |
+| `GEMINI_API_KEY`, `GEMINI_MODEL` | Only with `AI_PROVIDER=gemini`; both required (no default model). Set them as secrets in your host's environment, never in the repo. Check Google's free-tier data terms first ([ai.md](./ai.md#configuration)) |
 | Rate limits (`*_RATE_LIMIT_*`, `WS_*`) | Defaults are sized for normal use; see security.md §9 |
 
 The server refuses to start in production with placeholder/short/shared
-JWT secrets or a missing/wildcard `CLIENT_ORIGIN`. Numeric variables with
+JWT secrets, a missing/wildcard `CLIENT_ORIGIN`, a missing or unsafe
+`TRUST_PROXY`, or `MEDIA_STORAGE=local` without
+`ALLOW_LOCAL_MEDIA_STORAGE=true`; it lists every problem at once. Numeric variables with
 typos (e.g. `15m` where seconds are expected) fail fast at startup.
 
 Changing `JWT_*_SECRET` signs **everyone** out (all tokens become invalid).
@@ -197,7 +211,10 @@ in PostgreSQL, and clients always download through the authenticated
 
 - `local` (default): disk under `UPLOAD_DIR`. Single instance, not
   encrypted at rest, no quota, no cleanup of never-sent uploads. Needs a
-  persistent disk; back it up with the database (backup-recovery.md).
+  persistent disk; back it up with the database (backup-recovery.md). In
+  production it must be confirmed with `ALLOW_LOCAL_MEDIA_STORAGE=true`,
+  otherwise the server refuses to start — so a host whose disk is wiped on
+  redeploy can't silently lose every upload.
 - `cloudinary`: set `CLOUDINARY_URL` (from the Cloudinary console). Files
   are uploaded as `raw` assets (exact bytes, no processing) with delivery
   type `authenticated`, so they have no public URL; the backend fetches
@@ -233,7 +250,9 @@ in PostgreSQL, and clients always download through the authenticated
 
 - [ ] TLS everywhere (frontend, API, WSS, and DB if remote)
 - [ ] `NODE_ENV=production`, strong distinct JWT secrets, exact `CLIENT_ORIGIN`
-- [ ] `TRUST_PROXY` matches your proxy chain
+- [ ] `TRUST_PROXY` set to your proxy hop count (e.g. `1`), never `true`
+- [ ] `MEDIA_STORAGE=cloudinary` + `CLOUDINARY_URL` (or `local` + `ALLOW_LOCAL_MEDIA_STORAGE=true` on a persistent, backed-up disk)
+- [ ] Frontend built with `VITE_API_BASE_URL` (and `VITE_WS_URL`) for the production API
 - [ ] `/ws` Upgrade forwarded, its URLs not logged, idle timeout > 30s
 - [ ] Migrations applied with `db:migrate:prod` after a backup
 - [ ] Liveness `/health`, readiness `/health/ready` wired to the platform
